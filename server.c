@@ -167,7 +167,17 @@ static int do_handshake(int fd, char *room_out) {
     }
 
     char *k = strstr(buf, "Sec-WebSocket-Key:");
-    if (!k) return 0;
+    if (!k) {
+        /* Not a WebSocket upgrade (e.g. a plain GET from a host's health check).
+         * Reply with a tiny 200 so the platform sees the service as alive, then
+         * let the caller close the connection. */
+        const char *ok =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+            "Content-Length: 20\r\nConnection: close\r\n\r\n"
+            "chat-anoynm relay ok";
+        send(fd, ok, strlen(ok), 0);
+        return 0;
+    }
     k += 18;
     while (*k == ' ') k++;
     char key[128]; int i = 0;
