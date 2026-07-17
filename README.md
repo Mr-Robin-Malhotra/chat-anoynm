@@ -14,6 +14,17 @@ The frontend is a static page (hosted on Vercel). The relay is the C server in t
 repo, hosted separately because it's a long-running process (Vercel only runs static
 files and short serverless functions, not a persistent WebSocket server).
 
+## Features
+
+- End-to-end encrypted text and file sharing (drag-and-drop or click, with an upload
+  progress indicator and image previews)
+- Auto-reconnect with exponential backoff if the connection drops, plus a heartbeat that
+  detects a dead connection and recovers on its own
+- Live connection status (connecting / connected / reconnecting), typing indicator, and
+  message timestamps
+- One-click invite link that pre-fills the room, and a leave-room button
+- Works on mobile, keyboard-friendly, respects reduced-motion
+
 ## What it actually does
 
 - **End-to-end encryption in the browser.** Each side generates an ECDH P-256 key pair,
