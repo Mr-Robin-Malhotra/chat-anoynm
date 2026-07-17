@@ -22,6 +22,8 @@ let manualClose = false;      // true when the user hit "leave"
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let heartbeatTimer = null;
+let offerTimer = null;
+let announced = false;     // shown the "connected" state for this session
 let lastPong = 0;
 let peerTypingTimer = null;
 let myTypingSent = 0;
@@ -88,14 +90,30 @@ async function connect() {
   ws.onopen = async () => {
     reconnectAttempts = 0;
     lastPong = Date.now();
+    announced = false;
     setStatus("connecting", "waiting for the other person…");
     startHeartbeat();
-    send({ t: "key", jwk: await E2EE.publicKeyJwk() });
+    startOffer();          // send an offer, and keep retrying until connected
   };
   ws.onmessage = onMessage;
-  ws.onclose = () => { stopHeartbeat(); if (!manualClose) scheduleReconnect(); };
+  ws.onclose = () => { stopHeartbeat(); stopOffer(); if (!manualClose) scheduleReconnect(); };
   ws.onerror = () => { /* onclose will follow and handle reconnect */ };
 }
+
+// Send a key "offer" and re-send it periodically until the channel is up. This
+// recovers the case where the first offer reaches an empty room (the other
+// person hasn't joined yet) or is lost. Retries stop once we're connected.
+async function startOffer() {
+  stopOffer();
+  const sendOffer = async () => { send({ t: "key", role: "offer", jwk: await E2EE.publicKeyJwk() }); };
+  await sendOffer();
+  let tries = 0;
+  offerTimer = setInterval(async () => {
+    if (announced || ++tries > 8) { stopOffer(); return; }
+    await sendOffer();
+  }, 2000);
+}
+function stopOffer() { clearInterval(offerTimer); offerTimer = null; }
 
 function scheduleReconnect() {
   if (manualClose) return;
@@ -126,11 +144,19 @@ async function onMessage(ev) {
   if (m.t === "ping") return;                    // heartbeat, ignore
 
   if (m.t === "key") {
-    if (E2EE.ready()) return;                     // channel already up: no loop
+    // Offer/answer handshake (WebRTC-style). Always derive from the received key
+    // so reconnecting peers re-sync. An OFFER gets an ANSWER back; an ANSWER ends
+    // the exchange (no reply), so there's no infinite loop.
     try { await E2EE.deriveShared(m.jwk); } catch { return; }
-    send({ t: "key", jwk: await E2EE.publicKeyJwk() });
-    setStatus("connected", "encrypted — you're connected");
-    sys("Secure channel established. Messages are end-to-end encrypted.");
+    if (m.role === "offer") {
+      send({ t: "key", role: "answer", jwk: await E2EE.publicKeyJwk() });
+    }
+    if (!announced) {
+      announced = true;
+      stopOffer();
+      setStatus("connected", "encrypted — you're connected");
+      sys("Secure channel established. Messages are end-to-end encrypted.");
+    }
     return;
   }
 
