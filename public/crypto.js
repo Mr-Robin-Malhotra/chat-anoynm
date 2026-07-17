@@ -13,16 +13,20 @@
  * no long-term identity or forward secrecy, and it trusts the key exchange
  * isn't actively tampered with (no MITM protection). It's real encryption,
  * honestly scoped.
+ *
+ * Note the name E2EE: we deliberately avoid the name "Crypto" because the
+ * browser already has a built-in global by that name, and redeclaring it in a
+ * classic script throws and breaks the whole page.
  */
 
-const Crypto = (() => {
+const E2EE = (() => {
   let myKeys = null;
   let sharedKey = null;
 
   async function init() {
     myKeys = await crypto.subtle.generateKey(
       { name: "ECDH", namedCurve: "P-256" },
-      false,               // private key not extractable — can't leak it
+      false,               // private key not extractable, so it can't leak
       ["deriveKey"]
     );
   }
@@ -68,3 +72,5 @@ const Crypto = (() => {
 
   return { init, publicKeyJwk, deriveShared, ready, encrypt, decrypt, b64, unb64 };
 })();
+
+window.E2EE = E2EE;

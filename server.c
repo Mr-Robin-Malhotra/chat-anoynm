@@ -37,52 +37,60 @@
 #define ROOM_LEN      64
 
 /* ---- tiny SHA-1 (public-domain style), needed for the WS handshake ---- */
-typedef struct { uint32_t state[5]; uint32_t count[2]; unsigned char buffer[64]; } SHA1_CTX;
-#define R(v,b) (((v)<<(b))|((v)>>(32-(b))))
-#define BL(w,i) (block[i&15]=R(block[(i+13)&15]^block[(i+8)&15]^block[(i+2)&15]^block[i&15],1))
-#define R0(v,w,x,y,z,i) z+=((w&(x^y))^y)+block[i]+0x5A827999+R(v,5);w=R(w,30);
-#define R1(v,w,x,y,z,i) z+=((w&(x^y))^y)+BL(block,i)+0x5A827999+R(v,5);w=R(w,30);
-#define R2(v,w,x,y,z,i) z+=(w^x^y)+BL(block,i)+0x6ED9EBA1+R(v,5);w=R(w,30);
-#define R3(v,w,x,y,z,i) z+=(((w|x)&y)|(w&x))+BL(block,i)+0x8F1BBCDC+R(v,5);w=R(w,30);
-#define R4(v,w,x,y,z,i) z+=(w^x^y)+BL(block,i)+0xCA62C1D6+R(v,5);w=R(w,30);
+typedef struct { uint32_t state[5]; uint64_t bitlen; unsigned char buf[64]; int idx; } SHA1_CTX;
 
-static void sha1_transform(uint32_t state[5], const unsigned char buffer[64]) {
-    uint32_t a,b,c,d,e,block[16];
-    for (int i=0;i<16;i++) block[i]=((uint32_t)buffer[i*4]<<24)|(buffer[i*4+1]<<16)|(buffer[i*4+2]<<8)|(buffer[i*4+3]);
-    a=state[0];b=state[1];c=state[2];d=state[3];e=state[4];
-    R0(a,b,c,d,e,0);R0(e,a,b,c,d,1);R0(d,e,a,b,c,2);R0(c,d,e,a,b,3);R0(b,c,d,e,a,4);
-    R0(a,b,c,d,e,5);R0(e,a,b,c,d,6);R0(d,e,a,b,c,7);R0(c,d,e,a,b,8);R0(b,c,d,e,a,9);
-    R0(a,b,c,d,e,10);R0(e,a,b,c,d,11);R0(d,e,a,b,c,12);R0(c,d,e,a,b,13);R0(b,c,d,e,a,14);
-    R0(a,b,c,d,e,15);R1(e,a,b,c,d,16);R1(d,e,a,b,c,17);R1(c,d,e,a,b,18);R1(b,c,d,e,a,19);
-    R2(a,b,c,d,e,20);R2(e,a,b,c,d,21);R2(d,e,a,b,c,22);R2(c,d,e,a,b,23);R2(b,c,d,e,a,24);
-    R2(a,b,c,d,e,25);R2(e,a,b,c,d,26);R2(d,e,a,b,c,27);R2(c,d,e,a,b,28);R2(b,c,d,e,a,29);
-    R2(a,b,c,d,e,30);R2(e,a,b,c,d,31);R2(d,e,a,b,c,32);R2(c,d,e,a,b,33);R2(b,c,d,e,a,34);
-    R2(a,b,c,d,e,35);R2(e,a,b,c,d,36);R2(d,e,a,b,c,37);R2(c,d,e,a,b,38);R2(b,c,d,e,a,39);
-    R3(a,b,c,d,e,40);R3(e,a,b,c,d,41);R3(d,e,a,b,c,42);R3(c,d,e,a,b,43);R3(b,c,d,e,a,44);
-    R3(a,b,c,d,e,45);R3(e,a,b,c,d,46);R3(d,e,a,b,c,47);R3(c,d,e,a,b,48);R3(b,c,d,e,a,49);
-    R4(a,b,c,d,e,50);R4(e,a,b,c,d,51);R4(d,e,a,b,c,52);R4(c,d,e,a,b,53);R4(b,c,d,e,a,54);
-    R4(a,b,c,d,e,55);R4(e,a,b,c,d,56);R4(d,e,a,b,c,57);R4(c,d,e,a,b,58);R4(b,c,d,e,a,59);
-    R4(a,b,c,d,e,60);R4(e,a,b,c,d,61);R4(d,e,a,b,c,62);R4(c,d,e,a,b,63);R4(b,c,d,e,a,64);
-    R4(a,b,c,d,e,65);R4(e,a,b,c,d,66);R4(d,e,a,b,c,67);R4(c,d,e,a,b,68);R4(b,c,d,e,a,69);
-    R4(a,b,c,d,e,70);R4(e,a,b,c,d,71);R4(d,e,a,b,c,72);R4(c,d,e,a,b,73);R4(b,c,d,e,a,74);
-    R4(a,b,c,d,e,75);R4(e,a,b,c,d,76);R4(d,e,a,b,c,77);R4(c,d,e,a,b,78);R4(b,c,d,e,a,79);
-    state[0]+=a;state[1]+=b;state[2]+=c;state[3]+=d;state[4]+=e;
+#define ROL(v,b) (((v) << (b)) | ((v) >> (32 - (b))))
+
+static void sha1_transform(SHA1_CTX *ctx, const unsigned char data[64]) {
+    uint32_t w[80], a, b, c, d, e, t;
+    for (int i = 0; i < 16; i++)
+        w[i] = ((uint32_t)data[i*4] << 24) | ((uint32_t)data[i*4+1] << 16) |
+               ((uint32_t)data[i*4+2] << 8) | (uint32_t)data[i*4+3];
+    for (int i = 16; i < 80; i++)
+        w[i] = ROL(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2];
+    d = ctx->state[3]; e = ctx->state[4];
+
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if (i < 20)      { f = (b & c) | (~b & d);          k = 0x5A827999; }
+        else if (i < 40) { f = b ^ c ^ d;                   k = 0x6ED9EBA1; }
+        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+        else             { f = b ^ c ^ d;                   k = 0xCA62C1D6; }
+        t = ROL(a, 5) + f + e + k + w[i];
+        e = d; d = c; c = ROL(b, 30); b = a; a = t;
+    }
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c;
+    ctx->state[3] += d; ctx->state[4] += e;
 }
-static void sha1_init(SHA1_CTX *c){c->count[0]=c->count[1]=0;c->state[0]=0x67452301;c->state[1]=0xEFCDAB89;c->state[2]=0x98BADCFE;c->state[3]=0x10325476;c->state[4]=0xC3D2E1F0;}
-static void sha1_update(SHA1_CTX *c,const unsigned char *data,uint32_t len){
-    uint32_t i,j=(c->count[0]>>3)&63;
-    if((c->count[0]+=len<<3)<(len<<3))c->count[1]++;
-    c->count[1]+=(len>>29);
-    if((j+len)>63){memcpy(&c->buffer[j],data,(i=64-j));sha1_transform(c->state,c->buffer);for(;i+63<len;i+=64)sha1_transform(c->state,&data[i]);j=0;}else i=0;
-    memcpy(&c->buffer[j],&data[i],len-i);
+
+static void sha1_init(SHA1_CTX *ctx) {
+    ctx->state[0] = 0x67452301; ctx->state[1] = 0xEFCDAB89;
+    ctx->state[2] = 0x98BADCFE; ctx->state[3] = 0x10325476;
+    ctx->state[4] = 0xC3D2E1F0; ctx->bitlen = 0; ctx->idx = 0;
 }
-static void sha1_final(unsigned char digest[20],SHA1_CTX *c){
-    unsigned char fin[8];
-    for(int i=0;i<8;i++)fin[i]=(unsigned char)((c->count[(i>=4?0:1)]>>((3-(i&3))*8))&255);
-    unsigned char cc=0200;sha1_update(c,&cc,1);
-    while((c->count[0]&504)!=448){cc=0;sha1_update(c,&cc,1);}
-    sha1_update(c,fin,8);
-    for(int i=0;i<20;i++)digest[i]=(unsigned char)((c->state[i>>2]>>((3-(i&3))*8))&255);
+
+static void sha1_update(SHA1_CTX *ctx, const unsigned char *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        ctx->buf[ctx->idx++] = data[i];
+        ctx->bitlen += 8;
+        if (ctx->idx == 64) { sha1_transform(ctx, ctx->buf); ctx->idx = 0; }
+    }
+}
+
+static void sha1_final(unsigned char digest[20], SHA1_CTX *ctx) {
+    uint64_t bitlen = ctx->bitlen;
+    ctx->buf[ctx->idx++] = 0x80;
+    if (ctx->idx > 56) {
+        while (ctx->idx < 64) ctx->buf[ctx->idx++] = 0;
+        sha1_transform(ctx, ctx->buf); ctx->idx = 0;
+    }
+    while (ctx->idx < 56) ctx->buf[ctx->idx++] = 0;
+    for (int i = 7; i >= 0; i--) ctx->buf[ctx->idx++] = (bitlen >> (i * 8)) & 0xFF;
+    sha1_transform(ctx, ctx->buf);
+    for (int i = 0; i < 20; i++)
+        digest[i] = (ctx->state[i >> 2] >> ((3 - (i & 3)) * 8)) & 0xFF;
 }
 
 /* ---- base64 encode (for the WS accept key) ---- */
