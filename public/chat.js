@@ -82,8 +82,11 @@ async function onMessage(ev) {
   try { m = JSON.parse(ev.data); } catch { return; }
 
   if (m.t === "key") {
+    // Ignore extra key messages once the channel is up. Without this, both sides
+    // keep replying to each other's key forever (an infinite handshake loop).
+    if (E2EE.ready()) return;
     await E2EE.deriveShared(m.jwk);
-    // reply with our key too, so whoever joined second also gets set up
+    // reply with our key so the peer who joined first can derive the secret too
     send({ t: "key", jwk: await E2EE.publicKeyJwk() });
     setStatus(true, "encrypted — you're connected");
     sys("Secure channel established. Messages are end-to-end encrypted.");
