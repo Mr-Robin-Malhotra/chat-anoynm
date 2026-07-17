@@ -45,6 +45,23 @@ This is a learning project, not Signal. Being straight about what it is:
 The message contents themselves are genuinely encrypted end to end. I'd rather tell you the
 edges than oversell it.
 
+## Hardening the relay (against abuse, not against reading you)
+
+The relay can't read messages, but it still has to survive hostile clients. Following the
+OWASP WebSocket guidance, it:
+
+- **Requires masked, well-formed frames** and rejects anything malformed, with every length
+  bounds-checked against the bytes actually received (no buffer overrun).
+- **Caps payloads at 64 KB** and rejects oversized frames.
+- **Limits each room to 4 connections**, so a room can't be flooded.
+- **Rate-limits each connection** (about 40 messages per 10 seconds) and drops abusers.
+- **Reaps idle connections** after 2 minutes so abandoned sockets don't hold resources.
+- **Logs nothing.** No request logs, no message logs, one startup line and that's it.
+
+The WebSocket accept-key (SHA-1) is verified against the RFC 6455 test vector, so the
+handshake is correct rather than "seems to work in my browser." See `SECURITY-AUDIT.md`
+for the full checklist and what is deliberately out of scope.
+
 ## Run it
 
 ```bash

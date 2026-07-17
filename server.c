@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
+#include <time.h>
 #include <poll.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -109,14 +110,31 @@ static void b64(const unsigned char *in, int len, char *out) {
     out[o] = 0;
 }
 
+/* ---- limits (DoS / abuse protection, per OWASP WebSocket guidance) ---- */
+#define ROOM_CAP        4      /* max connections sharing one room */
+#define RATE_WINDOW     10     /* seconds */
+#define RATE_MAX        40     /* max messages per window per connection */
+#define IDLE_TIMEOUT    120    /* drop a connection after this many idle seconds */
+
 /* ---- per-connection state ---- */
 typedef struct {
     int fd;
     int handshaked;
     char room[ROOM_LEN];
+    time_t last_active;   /* for idle timeout */
+    time_t win_start;     /* start of current rate window */
+    int win_count;        /* messages seen in current window */
 } Client;
 
 static Client clients[MAX_CLIENTS];
+
+/* How many connections are currently in a given room. */
+static int room_count(const char *room) {
+    int n = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++)
+        if (clients[i].fd > 0 && strcmp(clients[i].room, room) == 0) n++;
+    return n;
+}
 
 static void ws_accept_key(const char *key, char *out) {
     char cat[256];
@@ -239,6 +257,16 @@ static int handle_frame(int idx) {
 
     for (int64_t i = 0; i < plen; i++) buf[pos + i] ^= mask[i & 3];
 
+    /* Rate limit: blunt a spamming/DoS client. Reset the window when it ages
+     * out, then drop the connection if it exceeds the cap within one window. */
+    time_t now = time(NULL);
+    clients[idx].last_active = now;
+    if (now - clients[idx].win_start >= RATE_WINDOW) {
+        clients[idx].win_start = now;
+        clients[idx].win_count = 0;
+    }
+    if (++clients[idx].win_count > RATE_MAX) return 0; /* too fast: disconnect */
+
     if (plen > 0) relay_to_room(idx, buf + pos, (size_t)plen);
     return 1;
 }
@@ -269,7 +297,8 @@ int main(int argc, char **argv) {
             if (clients[i].fd > 0) { fds[nf].fd = clients[i].fd; fds[nf].events = POLLIN; fds[nf].revents = 0; nf++; }
         }
 
-        if (poll(fds, nf, -1) < 0) { if (errno == EINTR) continue; break; }
+        /* Wake at least once a second so idle connections get reaped. */
+        if (poll(fds, nf, 1000) < 0) { if (errno == EINTR) continue; break; }
 
         if (fds[0].revents & POLLIN) {
             int c = accept(srv, NULL, NULL);
@@ -280,12 +309,16 @@ int main(int argc, char **argv) {
                 if (slot < 0) { close(c); }
                 else {
                     char room[ROOM_LEN];
-                    if (do_handshake(c, room)) {
+                    if (do_handshake(c, room) && room_count(room) < ROOM_CAP) {
+                        time_t now = time(NULL);
                         clients[slot].fd = c;
                         clients[slot].handshaked = 1;
                         strncpy(clients[slot].room, room, ROOM_LEN - 1);
                         clients[slot].room[ROOM_LEN - 1] = 0;
-                    } else close(c);
+                        clients[slot].last_active = now;
+                        clients[slot].win_start = now;
+                        clients[slot].win_count = 0;
+                    } else close(c); /* handshake failed OR room is full */
                 }
             }
         }
@@ -299,6 +332,15 @@ int main(int argc, char **argv) {
                 close(clients[idx].fd);
                 /* wipe the slot completely — nothing about this client survives */
                 memset(&clients[idx], 0, sizeof(Client));
+            }
+        }
+
+        /* Reap idle connections so abandoned sockets don't hold slots forever. */
+        time_t now = time(NULL);
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (clients[i].fd > 0 && now - clients[i].last_active > IDLE_TIMEOUT) {
+                close(clients[i].fd);
+                memset(&clients[i], 0, sizeof(Client));
             }
         }
     }
