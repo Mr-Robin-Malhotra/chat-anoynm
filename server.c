@@ -150,8 +150,13 @@ static void ws_accept_key(const char *key, char *out) {
  * id out of the request path (?room=...). Nothing is logged. */
 static int do_handshake(int fd, char *room_out) {
     char buf[BUF_SIZE];
+    /* Give the client a few seconds to send the HTTP request, then give up.
+     * Without this, a probe that connects but sends nothing (common from load
+     * balancers / health checks) would block this single-threaded loop forever. */
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     int n = recv(fd, buf, sizeof buf - 1, 0);
-    if (n <= 0) return 0;
+    if (n <= 0) return 0;   /* timeout, error, or client closed */
     buf[n] = 0;
 
     char *r = strstr(buf, "room=");
@@ -193,7 +198,14 @@ static int do_handshake(int fd, char *room_out) {
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Accept: %s\r\n\r\n", accept);
-    return send(fd, resp, len, 0) == len;
+    if (send(fd, resp, len, 0) != len) return 0;
+
+    /* Handshake done: clear the receive timeout so an established chat
+     * connection can stay quiet without being dropped. The idle-reaper in the
+     * main loop handles genuinely dead connections instead. */
+    struct timeval none = { 0, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);
+    return 1;
 }
 
 /* Send a raw text frame (server->client frames are never masked). */
