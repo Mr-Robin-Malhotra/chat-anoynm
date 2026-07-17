@@ -18,6 +18,9 @@ files and short serverless functions, not a persistent WebSocket server).
 
 - End-to-end encrypted text and file sharing (drag-and-drop or click, with an upload
   progress indicator and image previews)
+- **Anonymous images**: photos are re-encoded through a canvas in your browser before
+  sending, which strips all EXIF/GPS/camera metadata. The picture looks identical but no
+  longer leaks where or when it was taken, or what device took it
 - Auto-reconnect with exponential backoff if the connection drops, plus a heartbeat that
   detects a dead connection and recovers on its own
 - Live connection status (connecting / connected / reconnecting), typing indicator, and
