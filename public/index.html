@@ -6,17 +6,19 @@
 <title>chat-anoynm — private, encrypted, remembers nothing</title>
 <meta name="description" content="An end-to-end encrypted chat that stores nothing and logs nothing. No accounts, no history. Share a room, talk, send files, and when you leave it's gone." />
 <style>
-  /* Quiet-authority palette: blue-black, one deep-blue accent, one green signal.
-     Restraint reads as trustworthy for a privacy tool. */
+  /* High-tech "quiet HUD": deep space-black, electric cyan/blue accent, one
+     green signal. Glow and glass for a Stark-console feel, but restrained so it
+     still reads as a serious privacy tool, not a toy. */
   :root {
-    --bg: #0b0f14; --surface: #131922; --surface-2: #1a212c;
-    --line: rgba(231,236,242,.10); --line-2: rgba(231,236,242,.18);
-    --ink: #e7ecf2; --dim: #9aa7b6; --faint: #64707e;
-    --accent: #2e6be6; --accent-bright: #4f86f0;
+    --bg: #060a10; --surface: rgba(19,25,34,.72); --surface-2: rgba(26,33,44,.72);
+    --line: rgba(120,180,255,.12); --line-2: rgba(120,180,255,.24);
+    --ink: #e9f1fb; --dim: #93a4bb; --faint: #5c6b7f;
+    --accent: #3b82f6; --accent-bright: #60a5fa; --cyan: #22d3ee;
     --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+    --glow: 0 0 24px rgba(59,130,246,.45);
     --r: 14px;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
-    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -25,6 +27,29 @@
     font-family: var(--font); line-height: 1.5;
     display: flex; flex-direction: column;
     -webkit-font-smoothing: antialiased;
+    position: relative; overflow: hidden;
+  }
+  /* Animated tech backdrop: a faint moving grid + two slow aurora glows. */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(120,180,255,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(120,180,255,.045) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, #000 40%, transparent 100%);
+    animation: gridpan 22s linear infinite;
+  }
+  body::after {
+    content: ""; position: fixed; inset: -30%; z-index: -3; pointer-events: none;
+    background:
+      radial-gradient(38% 45% at 22% 26%, rgba(59,130,246,.22), transparent 70%),
+      radial-gradient(34% 42% at 82% 20%, rgba(34,211,238,.14), transparent 70%),
+      radial-gradient(40% 45% at 65% 90%, rgba(34,197,94,.08), transparent 70%);
+    filter: blur(24px);
+    animation: aurora 20s ease-in-out infinite alternate;
+  }
+  @keyframes gridpan { to { background-position: 42px 42px, 42px 42px; } }
+  @keyframes aurora { 0% { transform: translate3d(0,0,0) scale(1); } 100% { transform: translate3d(0,-24px,0) scale(1.06); } }
   }
   button, input { font: inherit; }
   button { cursor: pointer; border: none; border-radius: 10px; }
@@ -37,27 +62,38 @@
   }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .logo {
-    width: 52px; height: 52px; border-radius: var(--r); margin: 0 auto 18px;
+    width: 58px; height: 58px; border-radius: 16px; margin: 0 auto 20px;
     background: linear-gradient(135deg, #3B82F6, #1E4FBF);
-    display: grid; place-items: center; font-weight: 800; font-size: 22px; letter-spacing: -1px;
-    position: relative;
+    display: grid; place-items: center; font-weight: 800; font-size: 24px; letter-spacing: -1px;
+    position: relative; box-shadow: var(--glow), inset 0 0 0 1px rgba(255,255,255,.14);
+    animation: floaty 4s ease-in-out infinite;
   }
-  .logo::after { content:""; position:absolute; bottom:7px; right:7px; width:7px; height:7px; border-radius:50%; background: var(--green); }
-  #setup h1 { font-size: 27px; margin: 0 0 8px; letter-spacing: -.02em; }
+  @keyframes floaty { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+  .logo::after { content:""; position:absolute; bottom:8px; right:8px; width:8px; height:8px; border-radius:50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  #setup h1 { font-size: 29px; margin: 0 0 8px; letter-spacing: -.02em;
+    background: linear-gradient(90deg, var(--ink), var(--cyan)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
   #setup .sub { color: var(--dim); margin: 0 0 24px; }
   .field { position: relative; margin-bottom: 12px; }
   #room {
-    width: 100%; background: var(--surface); color: var(--ink);
+    width: 100%; background: rgba(19,25,34,.6); color: var(--ink); backdrop-filter: blur(12px);
     border: 1px solid var(--line-2); border-radius: 12px; padding: 14px 16px;
-    transition: border-color .15s;
+    transition: border-color .15s, box-shadow .15s; font-family: var(--mono); letter-spacing: .02em;
   }
-  #room:focus { outline: none; border-color: var(--accent); }
+  #room:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
   .btn-primary {
-    width: 100%; background: var(--accent); color: #fff; padding: 14px; font-weight: 600;
-    transition: background .15s, transform .05s;
+    width: 100%; background: linear-gradient(135deg, var(--accent), #1E4FBF); color: #fff;
+    padding: 14px; font-weight: 600; letter-spacing: .01em; position: relative; overflow: hidden;
+    box-shadow: var(--glow); transition: transform .05s, box-shadow .2s;
   }
-  .btn-primary:hover { background: var(--accent-bright); }
+  .btn-primary:hover { box-shadow: 0 0 34px rgba(59,130,246,.6); }
   .btn-primary:active { transform: translateY(1px); }
+  /* sweeping shimmer across the button */
+  .btn-primary::after {
+    content: ""; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,.28), transparent);
+    animation: sweep 3.5s ease-in-out infinite;
+  }
+  @keyframes sweep { 0%{left:-60%} 55%,100%{left:130%} }
   .reassure { margin-top: 20px; font-size: 12.5px; color: var(--faint); line-height: 1.6; }
   .reassure b { color: var(--dim); font-weight: 600; }
 
@@ -65,7 +101,8 @@
   #chat { display: none; flex: 1; flex-direction: column; min-height: 0; }
   header {
     display: flex; align-items: center; gap: 10px;
-    padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface);
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+    background: var(--surface); backdrop-filter: blur(16px) saturate(140%);
   }
   header .name { font-weight: 700; letter-spacing: -.01em; }
   header .room-tag { font-family: var(--mono); font-size: 11px; color: var(--faint);
@@ -100,8 +137,8 @@
     animation: pop .18s ease;
   }
   @keyframes pop { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: none; } }
-  .me .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
-  .them .bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+  .me .bubble { background: linear-gradient(135deg, var(--accent), #1E4FBF); color: #fff; border-bottom-right-radius: 5px; box-shadow: 0 2px 16px rgba(59,130,246,.28); }
+  .them .bubble { background: var(--surface); border: 1px solid var(--line-2); border-bottom-left-radius: 5px; backdrop-filter: blur(12px); }
   .meta { font-size: 10.5px; color: var(--faint); margin: 2px 4px 6px; font-family: var(--mono); }
   .sys { align-self: center; text-align: center; color: var(--faint); font-size: 12px;
     padding: 6px 0; max-width: 90%; }
@@ -122,7 +159,7 @@
   /* ---- composer ---- */
   form {
     display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line);
-    background: var(--surface); align-items: flex-end;
+    background: var(--surface); backdrop-filter: blur(16px); align-items: flex-end;
   }
   #text {
     flex: 1; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-2);
@@ -131,11 +168,13 @@
   }
   #text:focus { outline: none; border-color: var(--accent); }
   #send {
-    background: var(--accent); color: #fff; width: 42px; height: 42px; border-radius: 12px;
-    display: grid; place-items: center; flex: none; transition: background .15s;
+    background: linear-gradient(135deg, var(--accent), #1E4FBF); color: #fff; width: 42px; height: 42px; border-radius: 12px;
+    display: grid; place-items: center; flex: none; transition: box-shadow .15s, transform .05s;
+    box-shadow: 0 0 16px rgba(59,130,246,.4);
   }
-  #send:hover { background: var(--accent-bright); }
-  #send:disabled { opacity: .4; cursor: default; }
+  #send:hover { box-shadow: 0 0 26px rgba(59,130,246,.65); }
+  #send:active { transform: translateY(1px); }
+  #send:disabled { opacity: .35; box-shadow: none; cursor: default; }
 
   /* drag overlay */
   #drop {
@@ -148,7 +187,8 @@
     color: var(--ink); font-weight: 600; text-align: center;
   }
 
-  footer { text-align: center; font-size: 11px; color: var(--faint); padding: 7px; background: var(--surface); }
+  footer { text-align: center; font-size: 10.5px; color: var(--faint); padding: 7px;
+    background: var(--surface); backdrop-filter: blur(12px); font-family: var(--mono); letter-spacing: .04em; }
 
   /* toast */
   #toast {

@@ -174,21 +174,62 @@ async function sendFile(file) {
   const ts = Date.now();
   const row = addUploadingRow(file.name, file.size);
   try {
-    const buf = new Uint8Array(await file.arrayBuffer());
+    // For images: re-encode through a canvas to strip EXIF/GPS/camera metadata
+    // before it ever leaves the browser. The picture looks identical, but it no
+    // longer leaks where or when it was taken, or what device took it. This is
+    // the "anonymous" part: the file carries no hidden identifying data.
+    let buf, outName = file.name, outType = file.type;
+    if (file.type && file.type.startsWith("image/")) {
+      const cleaned = await stripImageMetadata(file);
+      if (cleaned) { buf = cleaned.bytes; outType = cleaned.type; outName = renameStripped(file.name, cleaned.type); }
+    }
+    if (!buf) buf = new Uint8Array(await file.arrayBuffer());
     row.setProgress(50);
     const payload = {
-      t: "file", ts, size: file.size,
+      t: "file", ts, size: buf.length,
       ...(await E2EE.encrypt(buf)),
-      name: await E2EE.encrypt(enc.encode(file.name)),
-      mime: await E2EE.encrypt(enc.encode(file.type || "application/octet-stream")),
+      name: await E2EE.encrypt(enc.encode(outName)),
+      mime: await E2EE.encrypt(enc.encode(outType || "application/octet-stream")),
     };
     row.setProgress(100);
     send(payload);
-    row.replaceWithFile(buf, file.name, file.type, file.size, ts);
+    row.replaceWithFile(buf, outName, outType, buf.length, ts);
   } catch {
     row.setError();
     toast("Couldn't send that file.");
   }
+}
+
+// Re-encode an image through a canvas. Canvas output contains ONLY pixels, so
+// all EXIF/GPS/IPTC/XMP metadata is dropped. Returns cleaned bytes, or null if
+// the image can't be decoded (then we fall back to sending it as-is).
+function stripImageMetadata(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        // PNG for images with transparency, JPEG otherwise (smaller, no alpha).
+        const outType = /png|gif/i.test(file.type) ? "image/png" : "image/jpeg";
+        canvas.toBlob(async (blob) => {
+          URL.revokeObjectURL(url);
+          if (!blob) return resolve(null);
+          resolve({ bytes: new Uint8Array(await blob.arrayBuffer()), type: outType });
+        }, outType, 0.92);
+      } catch { URL.revokeObjectURL(url); resolve(null); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+
+function renameStripped(name, type) {
+  const ext = type === "image/png" ? ".png" : ".jpg";
+  const base = name.replace(/\.[^.]+$/, "");
+  return base + ext;
 }
 
 // ---- typing indicator ----
