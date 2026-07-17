@@ -2,11 +2,17 @@
 
 A private chat that remembers nothing.
 
+**Live demo:** https://chat-anoynm.vercel.app  (open in two tabs, same room name)
+
 Two people share a room name, talk, and send files. Everything is encrypted in the
 browser before it leaves, the server can't read any of it, and when you both close the
 tab there's nothing left anywhere. No accounts, no message history, no logs.
 
 I started this as a fun project and came back to finish it properly.
+
+The frontend is a static page (hosted on Vercel). The relay is the C server in this
+repo, hosted separately because it's a long-running process (Vercel only runs static
+files and short serverless functions, not a persistent WebSocket server).
 
 ## What it actually does
 
