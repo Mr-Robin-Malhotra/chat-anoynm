@@ -272,7 +272,11 @@ static int handle_frame(int idx) {
 }
 
 int main(int argc, char **argv) {
-    int port = (argc > 1) ? atoi(argv[1]) : 8080;
+    /* Port priority: command-line arg, then $PORT (used by hosts like Render),
+     * then 8080. */
+    int port = 8080;
+    if (argc > 1) port = atoi(argv[1]);
+    else { const char *p = getenv("PORT"); if (p && atoi(p) > 0) port = atoi(p); }
 
     int srv = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;

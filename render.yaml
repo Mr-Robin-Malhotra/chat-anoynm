@@ -1,0 +1,10 @@
+# Render.com blueprint. Deploys the C relay from the Dockerfile, no card needed.
+# In Render: New -> Blueprint -> pick this repo, and it reads this file.
+services:
+  - type: web
+    name: chat-anoynm-relay
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore   # closest free region to India
+    healthCheckPath: /   # relay answers the WS handshake path; any 101/400 is "up"
