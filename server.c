@@ -124,6 +124,12 @@ typedef struct {
     time_t last_active;   /* for idle timeout */
     time_t win_start;     /* start of current rate window */
     int win_count;        /* messages seen in current window */
+    /* Persistent receive buffer. A WebSocket frame can be split across several
+     * TCP reads (common over TLS/proxies for large frames), so we accumulate
+     * bytes here and only consume whole frames. Without this, big frames like
+     * file chunks get truncated and lost. */
+    unsigned char rbuf[BUF_SIZE];
+    int rlen;
 } Client;
 
 static Client clients[MAX_CLIENTS];
@@ -240,28 +246,31 @@ static void relay_to_room(int from_idx, const unsigned char *payload, size_t len
  * unsigned-underflow trick.
  */
 static int handle_frame(int idx) {
-    unsigned char buf[BUF_SIZE];
-    int n = recv(clients[idx].fd, buf, sizeof buf, 0);
-    if (n <= 0) return 0;
+    Client *c = &clients[idx];
 
-    /* A single recv() can contain SEVERAL WebSocket frames back to back (the
-     * kernel coalesces them into one TCP read). File transfers send many chunk
-     * frames rapidly, so we must process every complete frame in the buffer,
-     * not just the first — otherwise chunks silently vanish. */
+    /* Read into whatever space is left in the persistent buffer. */
+    int space = BUF_SIZE - c->rlen;
+    if (space <= 0) return 0;                    /* frame bigger than buffer: drop conn */
+    int n = recv(c->fd, c->rbuf + c->rlen, space, 0);
+    if (n <= 0) return 0;
+    c->rlen += n;
+
+    /* Consume every COMPLETE frame in the buffer. A frame whose bytes haven't all
+     * arrived yet is left in place and completed on a later read (this is what
+     * makes large frames survive TCP/TLS fragmentation). */
     int off = 0;
-    while (off + 2 <= n) {
-        unsigned char *fr = buf + off;
-        int avail = n - off;
+    while (c->rlen - off >= 2) {
+        unsigned char *fr = c->rbuf + off;
+        int avail = c->rlen - off;
 
         int opcode = fr[0] & 0x0F;
         if (opcode == 0x8) return 0; /* close */
-
         if (!(fr[1] & 0x80)) return 0; /* client frames MUST be masked */
 
         int64_t plen = fr[1] & 0x7F;
         int pos = 2;
         if (plen == 126) {
-            if (avail < 4) break;              /* header split across reads: stop */
+            if (avail < 4) break;               /* length not fully arrived yet */
             plen = ((int64_t)fr[2] << 8) | fr[3];
             pos = 4;
         } else if (plen == 127) {
@@ -272,27 +281,28 @@ static int handle_frame(int idx) {
             if (plen < 0 || plen > BUF_SIZE) return 0;
         }
 
-        if (pos + 4 > avail) break;            /* mask bytes not fully here yet */
+        if (pos + 4 > avail) break;             /* mask bytes not all here yet */
+        if (plen > (int64_t)(avail - pos - 4)) break; /* payload not all here yet: wait */
+
         unsigned char mask[4];
         memcpy(mask, fr + pos, 4);
         pos += 4;
-
-        if (plen < 0 || plen > (int64_t)(avail - pos)) break; /* payload incomplete */
-
         for (int64_t i = 0; i < plen; i++) fr[pos + i] ^= mask[i & 3];
 
         /* Rate limit: blunt a spamming/DoS client. */
         time_t now = time(NULL);
-        clients[idx].last_active = now;
-        if (now - clients[idx].win_start >= RATE_WINDOW) {
-            clients[idx].win_start = now;
-            clients[idx].win_count = 0;
-        }
-        if (++clients[idx].win_count > RATE_MAX) return 0; /* too fast: disconnect */
+        c->last_active = now;
+        if (now - c->win_start >= RATE_WINDOW) { c->win_start = now; c->win_count = 0; }
+        if (++c->win_count > RATE_MAX) return 0; /* too fast: disconnect */
 
         if (plen > 0) relay_to_room(idx, fr + pos, (size_t)plen);
+        off += pos + (int)plen;                 /* next frame */
+    }
 
-        off += pos + (int)plen;                /* advance to the next frame */
+    /* Slide any leftover partial frame to the front for the next read. */
+    if (off > 0) {
+        c->rlen -= off;
+        if (c->rlen > 0) memmove(c->rbuf, c->rbuf + off, c->rlen);
     }
     return 1;
 }
