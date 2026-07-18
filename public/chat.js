@@ -195,6 +195,7 @@ async function onMessage(ev) {
     }
     if (!known) sys((m.name || "Someone") + " joined.");
     updateRoster();
+    flushPending(m.from);   // deliver any messages that arrived before this key
     if (!announced) {
       announced = true;
       setStatus("connected", "encrypted — end-to-end");
@@ -216,13 +217,18 @@ async function onMessage(ev) {
     // In a group, a sender fans out one ciphertext per recipient. Only handle
     // the copy addressed to me, decrypted with that sender's key.
     if (m.to && m.to !== myId) return;
-    if (!m.from || !E2EE.hasPeer(m.from)) return;
+    if (!m.from) return;
+    // A message can arrive a hair before our handshake with that sender finishes
+    // (they meshed slightly faster). Hold it and replay once we have the key,
+    // instead of dropping it.
+    if (!E2EE.hasPeer(m.from)) { queuePending(m.from, m); return; }
     let text; try { text = dec.decode(await E2EE.decryptFrom(m.from, m.iv, m.data)); }
     catch { return; }
     addMessage(text, "them", m.ts, m.id, m.replyTo, peers.get(m.from)?.name);
   } else if (m.t === "file-start") {
     if (m.to && m.to !== myId) return;
-    if (!m.from || !E2EE.hasPeer(m.from)) return;
+    if (!m.from) return;
+    if (!E2EE.hasPeer(m.from)) { queuePending(m.from, m); return; }
     incoming.set(m.id, { from: m.from, iv: m.iv, name: m.name, mime: m.mime, size: m.size, ts: m.ts, total: m.total, parts: new Array(m.total), got: 0 });
   } else if (m.t === "file-chunk") {
     if (m.to && m.to !== myId) return;
@@ -243,6 +249,21 @@ async function onMessage(ev) {
 
 // Reassembly buffer for incoming chunked files, keyed by file id.
 const incoming = new Map();
+
+// Messages that arrived just before the sender's key was ready, held per peer
+// and replayed the moment the handshake with that peer completes.
+const pending = new Map();     // peerId -> [messages]
+function queuePending(peerId, m) {
+  if (!pending.has(peerId)) pending.set(peerId, []);
+  const q = pending.get(peerId);
+  if (q.length < 50) q.push(m);   // bounded, so a bad peer can't grow it forever
+}
+function flushPending(peerId) {
+  const q = pending.get(peerId);
+  if (!q) return;
+  pending.delete(peerId);
+  for (const m of q) onMessage({ data: JSON.stringify(m) });
+}
 
 // ---- outgoing ----
 async function onSubmit(e) {
