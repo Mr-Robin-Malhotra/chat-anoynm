@@ -23,6 +23,7 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 let heartbeatTimer = null;
 let offerTimer = null;
+let fastOfferTimer = null;
 let announced = false;     // shown the "connected" state for this session
 let lastPong = 0;
 let peerTypingTimer = null;
@@ -134,17 +135,21 @@ async function connect() {
 // a while so newcomers always get picked up.
 async function startOffer() {
   stopOffer();
-  const jwk = await E2EE.publicKeyJwk();
-  const sendOffer = async () => { send({ t: "key", role: "offer", from: myId, name: myName, jwk: await E2EE.publicKeyJwk() }); };
-  await sendOffer();
+  const myJwk = await E2EE.publicKeyJwk();
+  const sendOffer = () => send({ t: "key", role: "offer", from: myId, name: myName, jwk: myJwk });
+  sendOffer();
+  // Offer quickly at first so the room meshes fast (new joiners get picked up in
+  // well under a second), then slow down to occasional keep-alive offers that
+  // catch anyone who joins later.
   let tries = 0;
-  offerTimer = setInterval(async () => {
-    // Keep offering for a while (covers people joining later). Stop after ~40s.
-    if (++tries > 20) { stopOffer(); return; }
-    await sendOffer();
+  fastOfferTimer = setInterval(sendOffer, 400);
+  setTimeout(() => { clearInterval(fastOfferTimer); fastOfferTimer = null; }, 3000);
+  offerTimer = setInterval(() => {
+    if (++tries > 40) { stopOffer(); return; }   // ~80s of slow keep-alive
+    sendOffer();
   }, 2000);
 }
-function stopOffer() { clearInterval(offerTimer); offerTimer = null; }
+function stopOffer() { clearInterval(offerTimer); offerTimer = null; clearInterval(fastOfferTimer); fastOfferTimer = null; }
 
 function scheduleReconnect() {
   if (manualClose) return;
