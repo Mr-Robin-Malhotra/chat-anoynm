@@ -66,15 +66,30 @@ const Call = (() => {
   // ---- starting / joining a call ----
   async function start(video) {
     if (active) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      ui.permHelp("This browser can't access the mic/camera. Try Chrome or Safari, and make sure you're on the https:// site.");
+      return;
+    }
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: video ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+        video: video ? { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } : false,
       });
     } catch (e) {
-      ui.error(e && e.name === "NotAllowedError"
-        ? "Please allow microphone/camera access to call."
-        : "Couldn't access your microphone/camera.");
+      const name = e && e.name;
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        // Permission was blocked/denied. On phones this needs a settings change,
+        // so show clear, device-specific steps rather than a vague toast.
+        ui.permHelp(null, video);
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        // No camera? Retry audio-only so a voice call still works.
+        if (video) { return start(false); }
+        ui.permHelp("No microphone was found on this device.");
+      } else if (name === "NotReadableError") {
+        ui.permHelp("Your camera or mic is being used by another app. Close it and try again.");
+      } else {
+        ui.permHelp("Couldn't access your microphone/camera. " + (e && e.message ? e.message : ""));
+      }
       return;
     }
     active = true; withVideo = video;

@@ -324,15 +324,19 @@
 
   /* minimized: hide the call UI but KEEP it running (media stays live) */
   #call-overlay.min { display: none; }
+  /* "Return to call" pill: floats at the TOP so it never sits on the composer,
+     reply bar, or toast. */
   #call-pill {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(80px + env(safe-area-inset-bottom));
-    z-index: 210; display: none; align-items: center; gap: 8px;
-    background: var(--accent); color: #fff; border: none; cursor: pointer;
-    padding: 11px 18px; border-radius: 24px; font-size: 14px; font-weight: 600;
+    position: fixed; left: 50%; transform: translateX(-50%); top: max(12px, env(safe-area-inset-top));
+    z-index: 215; display: none; align-items: center; gap: 8px;
+    background: var(--green); color: #04120a; border: none; cursor: pointer;
+    padding: 10px 18px; border-radius: 24px; font-size: 14px; font-weight: 700;
     box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    animation: dropIn .25s ease;
   }
   #call-pill.show { display: inline-flex; }
-  #call-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
+  #call-pill .dot { width: 9px; height: 9px; border-radius: 50%; background: #04120a; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
 
   #call-bar {
     display: flex; gap: 18px; justify-content: center; padding: 16px;
@@ -348,17 +352,42 @@
   .call-btn.off { background: #3a2020; color: #ff8b8b; }
   .call-btn.end { background: #dc2626; color: #fff; }
   .call-btn.end:hover { background: #ef4444; }
+  /* Incoming call: a banner that drops from the TOP (like a real phone call),
+     well clear of the message composer. */
   #call-incoming {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 90px; z-index: 150;
-    background: var(--surface); border: 1px solid var(--line-2); border-radius: 14px;
-    padding: 12px 14px; display: flex; gap: 10px; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,.4);
-    font-size: 14px;
+    position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%;
+    transform: translateX(-50%); z-index: 220; width: calc(100% - 24px); max-width: 420px;
+    background: var(--surface); border: 1px solid var(--line-2); border-radius: 16px;
+    padding: 12px 14px; display: flex; gap: 10px; align-items: center;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5); font-size: 14px;
+    animation: dropIn .25s ease;
   }
+  @keyframes dropIn { from { opacity: 0; transform: translateX(-50%) translateY(-14px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+  #call-incoming > span { flex: 1; min-width: 0; font-weight: 600; }
   #call-incoming button {
-    border: none; border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 600; font-size: 13px;
+    border: none; border-radius: 10px; padding: 9px 16px; cursor: pointer; font-weight: 700; font-size: 14px; flex: 0 0 auto;
   }
-  #call-join { background: var(--accent); color: #fff; }
+  #call-join { background: var(--green); color: #04120a; }
   #call-dismiss { background: var(--surface-2); color: var(--ink-dim); }
+
+  /* Permission help dialog: a real centered box with steps + retry. */
+  #perm-help {
+    position: fixed; inset: 0; z-index: 260; display: grid; place-items: center;
+    background: rgba(3,6,11,.7); backdrop-filter: blur(4px); padding: 20px;
+  }
+  .perm-card {
+    background: var(--surface); border: 1px solid var(--line-2); border-radius: 18px;
+    padding: 22px; max-width: 380px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .perm-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+  .perm-msg { color: var(--ink-dim); font-size: 14px; line-height: 1.5; margin: 0 0 10px; }
+  .perm-steps { color: var(--ink); font-size: 13px; line-height: 1.6; background: var(--surface-2);
+    border-radius: 10px; padding: 12px; margin: 0 0 16px; }
+  .perm-steps b { color: var(--accent); }
+  .perm-actions { display: flex; gap: 10px; }
+  .perm-actions button { flex: 1; border: none; border-radius: 10px; padding: 12px; cursor: pointer; font-weight: 700; font-size: 15px; }
+  #perm-retry { background: var(--accent); color: #fff; }
+  #perm-close { background: var(--surface-2); color: var(--ink-dim); }
 </style>
 </head>
 <body>

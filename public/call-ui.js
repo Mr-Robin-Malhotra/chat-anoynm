@@ -111,6 +111,36 @@
     },
   };
   function removeIncoming() { if (incomingBox) { incomingBox.remove(); incomingBox = null; } }
+
+  // A clear, actionable dialog when mic/camera access fails, with steps for the
+  // user's actual device and a retry button.
+  ui.permHelp = function (customMsg, wantedVideo) {
+    let box = $("perm-help");
+    if (box) box.remove();
+    const isiOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    const isAndroid = /Android/.test(navigator.userAgent);
+    const steps = isiOS
+      ? "On iPhone: tap the <b>“aA”</b> icon in Safari's address bar → <b>Website Settings</b> → set Camera &amp; Microphone to <b>Allow</b>, then tap Retry. (Or Settings → Safari → Camera/Microphone.)"
+      : isAndroid
+      ? "On Android: tap the <b>lock/ⓘ icon</b> next to the address bar → <b>Permissions</b> → turn on Camera &amp; Microphone, then tap Retry."
+      : "Click the <b>camera/lock icon</b> in your browser's address bar and set Camera &amp; Microphone to <b>Allow</b>, then tap Retry.";
+    box = document.createElement("div");
+    box.id = "perm-help";
+    box.innerHTML = `
+      <div class="perm-card">
+        <div class="perm-title">Allow mic &amp; camera</div>
+        <p class="perm-msg">${customMsg ? escapeHtml(customMsg) : "Your browser blocked access. To call, allow it:"}</p>
+        ${customMsg ? "" : `<p class="perm-steps">${steps}</p>`}
+        <div class="perm-actions">
+          <button id="perm-retry">Retry</button>
+          <button id="perm-close">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(box);
+    document.getElementById("perm-close").onclick = () => box.remove();
+    document.getElementById("perm-retry").onclick = () => { box.remove(); Call.start(!!wantedVideo); };
+  };
+
   function showPill() { const p = $("call-pill"); if (p) p.classList.add("show"); }
   function hidePill() { const p = $("call-pill"); if (p) p.classList.remove("show"); }
   function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
