@@ -12,16 +12,23 @@
     overlay = document.createElement("div");
     overlay.id = "call-overlay";
     overlay.innerHTML = `
+      <div id="call-top">
+        <button id="call-min" title="Back to chat (stay in call)" aria-label="Minimize call">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          <span>Chat</span>
+        </button>
+        <span id="call-title">On call</span>
+      </div>
       <div id="call-grid"></div>
       <div id="call-bar">
-        <button id="call-mic" class="call-btn" title="Mute / unmute">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+        <button id="call-mic" class="call-btn" title="Mute / unmute" aria-label="Mute or unmute">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
         </button>
-        <button id="call-cam" class="call-btn" title="Camera on / off">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        <button id="call-cam" class="call-btn" title="Camera on / off" aria-label="Camera on or off">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
         </button>
-        <button id="call-end" class="call-btn end" title="Leave call">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.66A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="23" y1="1" x2="1" y2="23"/></svg>
+        <button id="call-end" class="call-btn end" title="Leave call" aria-label="Leave call">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.66A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="23" y1="1" x2="1" y2="23"/></svg>
         </button>
       </div>`;
     document.body.appendChild(overlay);
@@ -29,6 +36,14 @@
     $("call-mic").onclick = () => { const on = Call.toggleMic(); $("call-mic").classList.toggle("off", !on); };
     $("call-cam").onclick = () => { const on = Call.toggleCam(); $("call-cam").classList.toggle("off", !on); };
     $("call-end").onclick = () => Call.hangup();
+    $("call-min").onclick = () => ui.minimize();
+    // Floating pill shown while minimized, to jump back into the call.
+    if (!document.getElementById("call-pill")) {
+      const pill = document.createElement("button");
+      pill.id = "call-pill"; pill.innerHTML = `<span class="dot on"></span> On call — tap to return`;
+      pill.onclick = () => ui.maximize();
+      document.body.appendChild(pill);
+    }
   }
 
   function tile(id, label, muted) {
@@ -44,7 +59,10 @@
   }
 
   const ui = {
-    open(video) { build(); overlay.classList.add("show"); overlay.classList.toggle("has-video", video); },
+    open(video) { build(); overlay.classList.remove("min"); overlay.classList.add("show"); overlay.classList.toggle("has-video", video); hidePill(); },
+    // Hide the call to see the chat, keep the call running. A floating pill returns.
+    minimize() { if (overlay) overlay.classList.add("min"); showPill(); },
+    maximize() { if (overlay) overlay.classList.remove("min"); hidePill(); },
     // Caller feedback so they're not staring at just themselves wondering if it worked.
     waiting(othersInRoom) {
       const bar = $("call-hint") || (() => {
@@ -56,7 +74,7 @@
       bar.style.display = "block";
     },
     hideWaiting() { const b = $("call-hint"); if (b) b.style.display = "none"; },
-    close() { if (overlay) { overlay.classList.remove("show"); if (grid) grid.innerHTML = ""; } removeIncoming(); },
+    close() { if (overlay) { overlay.classList.remove("show", "min"); if (grid) grid.innerHTML = ""; } removeIncoming(); hidePill(); },
     addLocal(stream, name, video) {
       const t = tile("local", name + " (you)", true);   // mute own tile: no echo
       t.querySelector("video").srcObject = stream;
@@ -93,6 +111,8 @@
     },
   };
   function removeIncoming() { if (incomingBox) { incomingBox.remove(); incomingBox = null; } }
+  function showPill() { const p = $("call-pill"); if (p) p.classList.add("show"); }
+  function hidePill() { const p = $("call-pill"); if (p) p.classList.remove("show"); }
   function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
   Call.setUI(ui);

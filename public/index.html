@@ -254,16 +254,31 @@
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; scroll-behavior: auto; } }
-  @media (max-width: 480px) { .row { max-width: 88%; } #setup { padding: 24px 18px; } }
+  @media (max-width: 480px) {
+    .row { max-width: 88%; }
+    #setup { padding: 24px 18px; }
+    /* On phones, stack call tiles in a single column so each is big and legible,
+       and keep the control bar comfortably tappable at the bottom. */
+    #call-grid { grid-template-columns: 1fr !important; gap: 6px; padding: 8px; }
+    .call-btn { width: 62px; height: 62px; }   /* easy thumb targets */
+    #call-bar { gap: 22px; }
+    .header-actions .icon-btn { width: 38px; height: 38px; }
+  }
+  /* Landscape phones / short screens: 2 columns so tiles don't get too tall */
+  @media (max-height: 480px) and (orientation: landscape) {
+    #call-grid { grid-template-columns: 1fr 1fr; }
+  }
 
   /* ---- call overlay ---- */
   #call-overlay {
     position: fixed; inset: 0; z-index: 200; background: #05070b;
     display: none; flex-direction: column;
+    height: 100dvh; height: var(--app-h, 100dvh);   /* follow the mobile viewport */
   }
   #call-overlay.show { display: flex; }
   #call-grid {
-    flex: 1; display: grid; gap: 8px; padding: 12px; align-content: center;
+    flex: 1 1 0; min-height: 0;                      /* MUST shrink so the bar stays visible */
+    display: grid; gap: 8px; padding: 12px; align-content: center; overflow: hidden;
     grid-template-columns: 1fr;
   }
   #call-grid:has(.call-tile:nth-child(2)) { grid-template-columns: 1fr 1fr; }
@@ -272,7 +287,7 @@
   #call-grid:has(.call-tile:nth-child(10)) { grid-template-columns: repeat(4, 1fr); }
   .call-tile {
     position: relative; background: var(--surface-2); border-radius: 14px; overflow: hidden;
-    aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; min-height: 0;
+    min-height: 0; min-width: 0; display: flex; align-items: center; justify-content: center;
   }
   .call-tile video { width: 100%; height: 100%; object-fit: cover; background: #0b0f14; }
   .call-tile.audio-only video { display: none; }
@@ -293,15 +308,41 @@
     text-align: center; color: var(--ink-dim); font-size: 13px; padding: 8px 16px;
     background: rgba(0,0,0,.25);
   }
+  /* top bar with the "back to chat" (minimize) button */
+  #call-top {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    flex: 0 0 auto;
+  }
+  #call-min {
+    display: inline-flex; align-items: center; gap: 7px; background: rgba(255,255,255,.1);
+    border: none; color: #fff; padding: 8px 14px; border-radius: 20px; cursor: pointer;
+    font-size: 14px; font-weight: 600;
+  }
+  #call-min:hover { background: rgba(255,255,255,.18); }
+  #call-title { margin-left: auto; color: var(--ink-dim); font-size: 13px; }
+
+  /* minimized: hide the call UI but KEEP it running (media stays live) */
+  #call-overlay.min { display: none; }
+  #call-pill {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(80px + env(safe-area-inset-bottom));
+    z-index: 210; display: none; align-items: center; gap: 8px;
+    background: var(--accent); color: #fff; border: none; cursor: pointer;
+    padding: 11px 18px; border-radius: 24px; font-size: 14px; font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  }
+  #call-pill.show { display: inline-flex; }
+  #call-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
+
   #call-bar {
-    display: flex; gap: 14px; justify-content: center; padding: 16px;
-    padding-bottom: max(16px, env(safe-area-inset-bottom));
-    background: rgba(0,0,0,.3); backdrop-filter: blur(10px);
+    display: flex; gap: 18px; justify-content: center; padding: 16px;
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+    background: rgba(0,0,0,.3); backdrop-filter: blur(10px); flex: 0 0 auto;
   }
   .call-btn {
-    width: 54px; height: 54px; border-radius: 50%; border: none; cursor: pointer;
+    width: 58px; height: 58px; border-radius: 50%; border: none; cursor: pointer;
     background: var(--surface-2); color: var(--ink); display: grid; place-items: center;
-    transition: background .15s, transform .1s;
+    transition: background .15s, transform .1s; flex: 0 0 auto;
   }
   .call-btn:hover { transform: translateY(-1px); }
   .call-btn.off { background: #3a2020; color: #ff8b8b; }
