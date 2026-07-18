@@ -32,6 +32,13 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <signal.h>
+
+/* MSG_NOSIGNAL is Linux (Render runs Linux); macOS lacks it, so fall back to 0
+ * there for local builds (we also ignore SIGPIPE in main as a belt-and-braces). */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 #define MAX_CLIENTS   256
 #define BUF_SIZE      65536
@@ -214,6 +221,22 @@ static int do_handshake(int fd, char *room_out) {
     return 1;
 }
 
+/* Write ALL bytes, looping until done. A plain send() may write only part of a
+ * large buffer and return early; the unsent tail would be lost. This is what
+ * truncated big frames (file chunks) before. MSG_NOSIGNAL stops a dead peer
+ * from killing us with SIGPIPE. */
+static int send_all(int fd, const unsigned char *p, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t w = send(fd, p + sent, len - sent, MSG_NOSIGNAL);
+        if (w > 0) { sent += (size_t)w; continue; }
+        if (w < 0 && (errno == EINTR)) continue;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue; /* blocking socket: retry */
+        return -1; /* real error */
+    }
+    return 0;
+}
+
 /* Send a raw text frame (server->client frames are never masked). */
 static void ws_send(int fd, const unsigned char *payload, size_t len) {
     unsigned char hdr[10]; size_t hl;
@@ -221,8 +244,7 @@ static void ws_send(int fd, const unsigned char *payload, size_t len) {
     if (len < 126) { hdr[1] = (unsigned char)len; hl = 2; }
     else if (len < 65536) { hdr[1] = 126; hdr[2] = (len>>8)&255; hdr[3] = len&255; hl = 4; }
     else { hdr[1] = 127; for (int i=0;i<8;i++) hdr[2+i] = (len >> ((7-i)*8)) & 255; hl = 10; }
-    send(fd, hdr, hl, 0);
-    send(fd, payload, len, 0);
+    if (send_all(fd, hdr, hl) == 0) send_all(fd, payload, len);
 }
 
 /* Relay a decoded payload to the OTHER client(s) in the same room. */
@@ -308,6 +330,8 @@ static int handle_frame(int idx) {
 }
 
 int main(int argc, char **argv) {
+    signal(SIGPIPE, SIG_IGN);   /* a write to a closed peer must not kill us */
+
     /* Port priority: command-line arg, then $PORT (used by hosts like Render),
      * then 8080. */
     int port = 8080;
