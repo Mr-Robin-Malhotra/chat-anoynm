@@ -137,6 +137,13 @@ typedef struct {
      * file chunks get truncated and lost. */
     unsigned char rbuf[BUF_SIZE];
     int rlen;
+    /* Message reassembly. Per RFC 6455 an intermediary may SPLIT one message
+     * into a first frame (FIN=0) plus continuation frames (opcode 0x0), the
+     * last with FIN=1. We concatenate their payloads here and only relay the
+     * whole message once FIN=1 arrives. Render's proxy does exactly this to
+     * large frames, so without reassembly images arrive truncated. */
+    unsigned char mbuf[BUF_SIZE];
+    int mlen;
 } Client;
 
 static Client clients[MAX_CLIENTS];
@@ -192,7 +199,7 @@ static int do_handshake(int fd, char *room_out) {
         const char *ok =
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
             "Content-Length: 23\r\nConnection: close\r\n\r\n"
-            "chat-anoynm relay ok v3";
+            "chat-anoynm relay ok v4";
         send(fd, ok, strlen(ok), 0);
         return 0;
     }
@@ -285,8 +292,10 @@ static int handle_frame(int idx) {
         unsigned char *fr = c->rbuf + off;
         int avail = c->rlen - off;
 
+        int fin = fr[0] & 0x80;
         int opcode = fr[0] & 0x0F;
         if (opcode == 0x8) return 0; /* close */
+        if (opcode == 0x9 || opcode == 0xA) { /* ping/pong: skip, don't relay */ }
         if (!(fr[1] & 0x80)) return 0; /* client frames MUST be masked */
 
         int64_t plen = fr[1] & 0x7F;
@@ -311,13 +320,24 @@ static int handle_frame(int idx) {
         pos += 4;
         for (int64_t i = 0; i < plen; i++) fr[pos + i] ^= mask[i & 3];
 
-        /* Rate limit: blunt a spamming/DoS client. */
+        /* Rate limit: blunt a spamming/DoS client. Counts whole frames. */
         time_t now = time(NULL);
         c->last_active = now;
         if (now - c->win_start >= RATE_WINDOW) { c->win_start = now; c->win_count = 0; }
         if (++c->win_count > RATE_MAX) return 0; /* too fast: disconnect */
 
-        if (plen > 0) relay_to_room(idx, fr + pos, (size_t)plen);
+        /* Reassemble: append this frame's payload to the message buffer, and
+         * only relay the complete message when FIN is set. A lone unfragmented
+         * frame (opcode!=0, FIN=1) passes straight through this same path. */
+        if (opcode != 0x9 && opcode != 0xA) {   /* data/continuation only */
+            if (c->mlen + (int)plen > BUF_SIZE) return 0; /* message too big */
+            memcpy(c->mbuf + c->mlen, fr + pos, (size_t)plen);
+            c->mlen += (int)plen;
+            if (fin) {
+                if (c->mlen > 0) relay_to_room(idx, c->mbuf, (size_t)c->mlen);
+                c->mlen = 0;                    /* ready for the next message */
+            }
+        }
         off += pos + (int)plen;                 /* next frame */
     }
 
