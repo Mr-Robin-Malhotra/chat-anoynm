@@ -322,11 +322,14 @@ async function sendFile(file) {
     }
     if (!buf) buf = new Uint8Array(await file.arrayBuffer());
 
-    // The relay only forwards frames up to ~64 KB, so a file goes as a stream of
-    // chunk messages the receiver reassembles. In a group we fan out: encrypt
-    // per peer (their own key) and stream an addressed copy to each. Name/mime
-    // ride along on the "file-start" message.
-    const CHUNK = 40000;                       // base64 chars per chunk (under 64 KB frame)
+    // A file goes as a stream of small chunk messages the receiver reassembles.
+    // Chunks are kept SMALL (~8 KB) so the hosting proxy in front of the relay
+    // never splits one chunk's WebSocket frame into fragments (which would
+    // truncate it). In a group we fan out: encrypt per peer (their own key) and
+    // stream an addressed copy to each. Name/mime ride on the "file-start".
+    const CHUNK = 3000;                        // base64 chars/chunk. Measured: the
+    // hosting proxy truncates WebSocket frames above ~4 KB, so keep each chunk's
+    // frame (chunk + JSON overhead + mask) comfortably under that.
     const nameBytes = enc.encode(outName);
     const mimeBytes = enc.encode(outType || "application/octet-stream");
     const pids = E2EE.peerIds();
