@@ -51,6 +51,19 @@ function wire() {
   $("copyLink").onclick = copyInviteLink;
   $("leave").onclick = leaveRoom;
   $("reply-cancel").onclick = cancelReply;
+  if ($("callVoice")) $("callVoice").onclick = () => Call.start(false);
+  if ($("callVideo")) $("callVideo").onclick = () => Call.start(true);
+
+  // Give the call module a way to signal peers (via the relay) and read names.
+  if (typeof Call !== "undefined") {
+    Call.configure({
+      signal: (obj) => send(obj),
+      getMyId: () => myId,
+      getName: () => myName,
+      getPeerName: (id) => (peers.get(id)?.name) || "Guest",
+    });
+  }
+  window.__toast = (msg) => toast(msg);
   const ta = $("text");
   ta.addEventListener("input", () => { autoGrow(ta); signalTyping(); });
   ta.addEventListener("keydown", (e) => {
@@ -179,6 +192,9 @@ async function onMessage(ev) {
 
   if (m.t === "ping") return;                    // heartbeat, ignore
 
+  // Call signaling (SDP/ICE) rides on the same relay; hand it to the call module.
+  if (m.from !== myId && typeof Call !== "undefined" && Call.handle(m)) return;
+
   if (m.t === "key") {
     // Group handshake: pairwise offer/answer, addressed by peer id.
     // - Ignore my own broadcasts, and answers meant for someone else.
@@ -208,6 +224,7 @@ async function onMessage(ev) {
   if (m.t === "bye" && m.from) {
     const p = peers.get(m.from);
     if (p) { sys((p.name || "Someone") + " left."); peers.delete(m.from); E2EE.forget(m.from); updateRoster(); }
+    if (typeof Call !== "undefined") Call.handle({ t: "call-leave", from: m.from });
     return;
   }
 
@@ -564,6 +581,7 @@ function copyInviteLink() {
 }
 function leaveRoom() {
   manualClose = true;
+  try { if (typeof Call !== "undefined" && Call.inCall()) Call.hangup(); } catch {}
   try { send({ t: "bye", from: myId }); } catch {}   // let peers remove me cleanly
   clearTimeout(reconnectTimer); stopHeartbeat(); stopOffer();
   try { ws && ws.close(); } catch {}

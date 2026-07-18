@@ -22,6 +22,10 @@ files and short serverless functions, not a persistent WebSocket server).
   pairwise fan-out: each pair of people derives its own ECDH key, and a message is
   encrypted separately for each recipient. The relay still only ever sees ciphertext.
   Nicknames are cosmetic and unauthenticated (a peer could claim any name).
+- **Voice and video calls, including group calls** over WebRTC in a mesh (every
+  participant connects directly to every other). Fine for small rooms. The existing
+  WebSocket relay doubles as the signaling channel; the media itself flows peer-to-peer,
+  never through the relay. WebRTC media is always encrypted in transit (DTLS-SRTP).
 - **Reply to a message** (tap a bubble's reply arrow) with a quoted preview you can click
   to jump back to the original, like WhatsApp/Instagram
 - Works properly on phones: the layout follows the on-screen keyboard so the newest
@@ -69,6 +73,12 @@ This is a learning project, not Signal. Being straight about what it is:
   from picking any name. Don't treat a name as proof of who you're talking to.
 - **Group chat uses pairwise fan-out**, which is simple and correct but O(n) work per
   message. It's meant for small rooms, not large groups.
+- **Calls use a mesh**, so each person uploads their stream to everyone else. That's fine
+  for a handful of people but doesn't scale to large calls (an SFU media server would).
+- **Calls need STUN/TURN to cross NATs.** Free public STUN plus a free community TURN are
+  configured, so most calls connect, but some people behind strict/corporate firewalls may
+  fail to connect without a paid TURN server. Call media is encrypted by WebRTC's own
+  DTLS-SRTP, which is a different mechanism than the chat's end-to-end encryption.
 - **Metadata isn't hidden from the relay operator.** They can see that connections joined
   a room and roughly when, just not what was said.
 - **Not audited.** I wrote it to learn how E2EE and WebSockets work, and I'm not claiming it's
