@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content" />
 <title>chat-anoynm — private, encrypted, remembers nothing</title>
 <meta name="description" content="An end-to-end encrypted chat that stores nothing and logs nothing. No accounts, no history. Share a room, talk, send files, and when you leave it's gone." />
 <style>
@@ -28,6 +28,10 @@
     display: flex; flex-direction: column;
     -webkit-font-smoothing: antialiased;
     position: relative; overflow: hidden;
+    /* Dynamic viewport height so the layout follows the on-screen keyboard on
+       phones. A JS visualViewport fallback (below) sets --app-h for iOS. */
+    height: 100dvh;
+    height: var(--app-h, 100dvh);
   }
   /* Animated tech backdrop: a faint moving grid + two slow aurora glows. */
   body::before {
@@ -149,12 +153,62 @@
   .me .file-att .fi { background: rgba(255,255,255,.2); }
   .file-att .fn { font-size: 13px; }
   .file-att .fs { font-size: 11px; opacity: .7; }
-  .img-att { max-width: 220px; max-height: 220px; border-radius: 12px; display: block; }
+  .img-att { max-width: 240px; max-height: 240px; border-radius: 12px; display: block; }
+  .img-save { display: inline-block; margin-top: 6px; font-size: 11px; color: inherit; opacity: .8;
+    text-decoration: underline; text-underline-offset: 2px; }
+  .img-save:hover { opacity: 1; }
+  .lightbox {
+    position: fixed; inset: 0; z-index: 100; background: rgba(3,6,11,.92);
+    display: grid; place-items: center; padding: 24px; cursor: zoom-out;
+    backdrop-filter: blur(6px); animation: fade .18s ease;
+  }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  .lightbox img { max-width: 96vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 0 60px rgba(0,0,0,.6); }
   .typing { align-self: flex-start; display: none; padding: 4px 0 8px 4px; }
   .typing.show { display: flex; gap: 3px; }
   .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); animation: bob 1.2s infinite; }
   .typing span:nth-child(2){animation-delay:.15s} .typing span:nth-child(3){animation-delay:.3s}
   @keyframes bob { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-4px);opacity:1} }
+
+  /* ---- group chat bits ---- */
+  .sender { font-size: 11px; font-weight: 700; color: var(--accent); margin-bottom: 3px; }
+  .people-count {
+    font-size: 11px; font-weight: 500; color: var(--ink-dim); background: var(--surface-2);
+    border: 1px solid var(--line-2); padding: 1px 7px; border-radius: 20px; margin-left: 6px; vertical-align: middle;
+  }
+  .t-label { font-size: 12px; color: var(--ink-dim); margin-right: 6px; }
+  .t-label:empty { display: none; }
+
+  /* ---- reply feature ---- */
+  .bubble-wrap { position: relative; display: flex; align-items: center; gap: 6px; }
+  .reply-btn {
+    opacity: 0; background: var(--surface-2); border: 1px solid var(--line-2); color: var(--ink-dim);
+    width: 28px; height: 28px; border-radius: 50%; cursor: pointer; flex: 0 0 auto;
+    display: grid; place-items: center; transition: opacity .15s, color .15s;
+  }
+  .row:hover .reply-btn { opacity: 1; }
+  .reply-btn:hover { color: var(--ink); }
+  .row.me .bubble-wrap { flex-direction: row-reverse; }
+  .quote {
+    border-left: 3px solid var(--accent); padding: 4px 8px; margin: -2px -2px 6px;
+    background: rgba(255,255,255,.06); border-radius: 6px; font-size: 12px;
+    color: var(--ink-dim); cursor: pointer; max-width: 100%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .quote .q-who { display: block; font-weight: 600; color: var(--accent); font-size: 11px; }
+  .row.flash > .bubble-wrap > .bubble { animation: flashHi 1.1s ease; }
+  @keyframes flashHi { 0%,100%{ box-shadow: 0 0 0 0 transparent; } 30%{ box-shadow: 0 0 0 3px var(--accent); } }
+  #reply-bar {
+    display: none; align-items: center; gap: 10px; padding: 8px 14px;
+    border-top: 1px solid var(--line); background: var(--surface);
+    border-left: 3px solid var(--accent);
+  }
+  #reply-bar.show { display: flex; }
+  #reply-bar .rb-body { flex: 1; min-width: 0; font-size: 13px; }
+  #reply-bar .rb-label { display: block; color: var(--accent); font-size: 11px; font-weight: 600; }
+  #reply-bar .rb-text { color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  #reply-cancel { background: none; border: none; color: var(--ink-dim); font-size: 22px; cursor: pointer; line-height: 1; padding: 0 4px; }
+  #reply-cancel:hover { color: var(--ink); }
 
   /* ---- composer ---- */
   form {
@@ -210,13 +264,16 @@
     <h1>chat-anoynm</h1>
     <p class="sub">Private chat that remembers nothing.</p>
     <div class="field">
+      <input id="nick" placeholder="Your name (optional)" autocomplete="off" spellcheck="false" maxlength="24" aria-label="Your name" />
+    </div>
+    <div class="field">
       <input id="room" placeholder="Room name — make one up" autocomplete="off" spellcheck="false" aria-label="Room name" />
     </div>
     <button id="join" class="btn-primary">Enter room</button>
     <p class="reassure">
-      <b>End-to-end encrypted in your browser.</b> The key never leaves this page, and the
-      server only relays scrambled data it can't read. No accounts, no history, no logs.
-      Close the tab and it's gone.
+      <b>End-to-end encrypted in your browser.</b> Share the room name with a few people to
+      chat as a group. The key never leaves this page, and the server only relays scrambled
+      data it can't read. No accounts, no history, no logs. Close the tab and it's gone.
     </p>
   </div>
 
@@ -225,7 +282,7 @@
     <header>
       <span class="dot" id="dot" aria-hidden="true"></span>
       <div>
-        <div class="name">chat-anoynm</div>
+        <div class="name">chat-anoynm <span id="peopleCount" class="people-count">just you</span></div>
         <div class="status" id="status">connecting…</div>
       </div>
       <span class="room-tag" id="roomTag"></span>
@@ -240,7 +297,12 @@
     </header>
 
     <div id="log" role="log" aria-live="polite"></div>
-    <div class="typing" id="typing" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div class="typing" id="typing" aria-hidden="true"><span class="t-label"></span><span></span><span></span><span></span></div>
+
+    <div id="reply-bar" aria-hidden="true">
+      <div class="rb-body"><span class="rb-label">Replying to</span><span class="rb-text" id="reply-text"></span></div>
+      <button type="button" id="reply-cancel" aria-label="Cancel reply">&times;</button>
+    </div>
 
     <form id="form">
       <input type="file" id="file" hidden />

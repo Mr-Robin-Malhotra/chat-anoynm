@@ -18,6 +18,14 @@ files and short serverless functions, not a persistent WebSocket server).
 
 - End-to-end encrypted text and file sharing (drag-and-drop or click, with an upload
   progress indicator and image previews)
+- **Group chat** (up to 6 people in a room) with optional **nicknames**. Encryption is
+  pairwise fan-out: each pair of people derives its own ECDH key, and a message is
+  encrypted separately for each recipient. The relay still only ever sees ciphertext.
+  Nicknames are cosmetic and unauthenticated (a peer could claim any name).
+- **Reply to a message** (tap a bubble's reply arrow) with a quoted preview you can click
+  to jump back to the original, like WhatsApp/Instagram
+- Works properly on phones: the layout follows the on-screen keyboard so the newest
+  message and the input stay visible
 - **Anonymous images**: photos are re-encoded through a canvas in your browser before
   sending, which strips all EXIF/GPS/camera metadata. The picture looks identical but no
   longer leaks where or when it was taken, or what device took it
@@ -57,7 +65,11 @@ This is a learning project, not Signal. Being straight about what it is:
   passes public keys through honestly. A malicious relay could swap keys. Real apps prevent
   this with identity verification; this doesn't.
 - **No forward secrecy or long-term identity.** Keys are per-session only.
-- **Metadata isn't hidden from the relay operator.** They can see that two connections joined
+- **Nicknames are unauthenticated.** They're a display convenience; nothing stops a peer
+  from picking any name. Don't treat a name as proof of who you're talking to.
+- **Group chat uses pairwise fan-out**, which is simple and correct but O(n) work per
+  message. It's meant for small rooms, not large groups.
+- **Metadata isn't hidden from the relay operator.** They can see that connections joined
   a room and roughly when, just not what was said.
 - **Not audited.** I wrote it to learn how E2EE and WebSockets work, and I'm not claiming it's
   bulletproof. Don't use it for anything where your safety depends on it.

@@ -111,9 +111,9 @@ static void b64(const unsigned char *in, int len, char *out) {
 }
 
 /* ---- limits (DoS / abuse protection, per OWASP WebSocket guidance) ---- */
-#define ROOM_CAP        4      /* max connections sharing one room */
+#define ROOM_CAP        6      /* max connections sharing one room (small group) */
 #define RATE_WINDOW     10     /* seconds */
-#define RATE_MAX        40     /* max messages per window per connection */
+#define RATE_MAX        600    /* max frames per window (files stream as many chunks) */
 #define IDLE_TIMEOUT    120    /* drop a connection after this many idle seconds */
 
 /* ---- per-connection state ---- */
@@ -243,53 +243,57 @@ static int handle_frame(int idx) {
     unsigned char buf[BUF_SIZE];
     int n = recv(clients[idx].fd, buf, sizeof buf, 0);
     if (n <= 0) return 0;
-    if (n < 2) return 0;
 
-    int opcode = buf[0] & 0x0F;
-    if (opcode == 0x8) return 0; /* close */
+    /* A single recv() can contain SEVERAL WebSocket frames back to back (the
+     * kernel coalesces them into one TCP read). File transfers send many chunk
+     * frames rapidly, so we must process every complete frame in the buffer,
+     * not just the first — otherwise chunks silently vanish. */
+    int off = 0;
+    while (off + 2 <= n) {
+        unsigned char *fr = buf + off;
+        int avail = n - off;
 
-    int masked = buf[1] & 0x80;
-    if (!masked) return 0; /* per spec, client frames MUST be masked */
+        int opcode = fr[0] & 0x0F;
+        if (opcode == 0x8) return 0; /* close */
 
-    int64_t plen = buf[1] & 0x7F;
-    int pos = 2;
+        if (!(fr[1] & 0x80)) return 0; /* client frames MUST be masked */
 
-    if (plen == 126) {
-        if (n < 4) return 0;
-        plen = ((int64_t)buf[2] << 8) | buf[3];
-        pos = 4;
-    } else if (plen == 127) {
-        if (n < 10) return 0;
-        plen = 0;
-        for (int i = 0; i < 8; i++) plen = (plen << 8) | buf[2 + i];
-        pos = 10;
-        /* reject absurd/negative lengths outright */
-        if (plen < 0 || plen > BUF_SIZE) return 0;
+        int64_t plen = fr[1] & 0x7F;
+        int pos = 2;
+        if (plen == 126) {
+            if (avail < 4) break;              /* header split across reads: stop */
+            plen = ((int64_t)fr[2] << 8) | fr[3];
+            pos = 4;
+        } else if (plen == 127) {
+            if (avail < 10) break;
+            plen = 0;
+            for (int i = 0; i < 8; i++) plen = (plen << 8) | fr[2 + i];
+            pos = 10;
+            if (plen < 0 || plen > BUF_SIZE) return 0;
+        }
+
+        if (pos + 4 > avail) break;            /* mask bytes not fully here yet */
+        unsigned char mask[4];
+        memcpy(mask, fr + pos, 4);
+        pos += 4;
+
+        if (plen < 0 || plen > (int64_t)(avail - pos)) break; /* payload incomplete */
+
+        for (int64_t i = 0; i < plen; i++) fr[pos + i] ^= mask[i & 3];
+
+        /* Rate limit: blunt a spamming/DoS client. */
+        time_t now = time(NULL);
+        clients[idx].last_active = now;
+        if (now - clients[idx].win_start >= RATE_WINDOW) {
+            clients[idx].win_start = now;
+            clients[idx].win_count = 0;
+        }
+        if (++clients[idx].win_count > RATE_MAX) return 0; /* too fast: disconnect */
+
+        if (plen > 0) relay_to_room(idx, fr + pos, (size_t)plen);
+
+        off += pos + (int)plen;                /* advance to the next frame */
     }
-
-    /* need 4 mask bytes after the header */
-    if (pos + 4 > n) return 0;
-    unsigned char mask[4];
-    memcpy(mask, buf + pos, 4);
-    pos += 4;
-
-    /* the full payload must fit in what we actually read (no fragmentation
-     * reassembly here — oversized frames are simply rejected) */
-    if (plen < 0 || plen > (int64_t)(n - pos)) return 0;
-
-    for (int64_t i = 0; i < plen; i++) buf[pos + i] ^= mask[i & 3];
-
-    /* Rate limit: blunt a spamming/DoS client. Reset the window when it ages
-     * out, then drop the connection if it exceeds the cap within one window. */
-    time_t now = time(NULL);
-    clients[idx].last_active = now;
-    if (now - clients[idx].win_start >= RATE_WINDOW) {
-        clients[idx].win_start = now;
-        clients[idx].win_count = 0;
-    }
-    if (++clients[idx].win_count > RATE_MAX) return 0; /* too fast: disconnect */
-
-    if (plen > 0) relay_to_room(idx, buf + pos, (size_t)plen);
     return 1;
 }
 

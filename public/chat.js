@@ -28,6 +28,12 @@ let lastPong = 0;
 let peerTypingTimer = null;
 let myTypingSent = 0;
 
+// Identity for group chat. myId is a stable random id for this session; peers
+// is the roster of everyone we've shaken hands with (peerId -> {name}).
+const myId = Math.random().toString(36).slice(2, 10);
+let myName = "Anonymous";
+const peers = new Map();      // peerId -> { name }
+
 const MAX_FILE = 8 * 1024 * 1024;         // 8 MB
 const HEARTBEAT_MS = 15000;
 const DEAD_MS = 40000;                      // no traffic this long -> reconnect
@@ -43,15 +49,35 @@ function wire() {
   $("file").addEventListener("change", (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ""; });
   $("copyLink").onclick = copyInviteLink;
   $("leave").onclick = leaveRoom;
+  $("reply-cancel").onclick = cancelReply;
   const ta = $("text");
   ta.addEventListener("input", () => { autoGrow(ta); signalTyping(); });
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(e); }
+    if (e.key === "Escape" && replyingTo) { e.preventDefault(); cancelReply(); }
   });
   setupDragDrop();
+  setupMobileKeyboard();
   // pre-fill room from ?room= so invite links work
   const preset = new URLSearchParams(location.search).get("room");
   if (preset) { $("room").value = preset; }
+}
+
+// Keep the composer and newest message visible when the phone keyboard opens.
+// visualViewport shrinks when the keyboard shows; we match the app height to it
+// and scroll the log to the bottom so messages don't hide behind the keyboard.
+function setupMobileKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const apply = () => {
+    document.documentElement.style.setProperty("--app-h", vv.height + "px");
+    scrollDown();
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+  // When the message box is focused, make sure the latest message stays in view.
+  $("text").addEventListener("focus", () => setTimeout(scrollDown, 100));
+  apply();
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wire);
 else wire();
@@ -59,6 +85,8 @@ else wire();
 function joinFromInput() {
   const r = $("room").value.trim();
   if (!r) { shake($("room")); return; }
+  const nm = ($("nick") ? $("nick").value.trim() : "");
+  myName = nm ? nm.slice(0, 24) : "Anonymous";
   room = r;
   manualClose = false;
   reconnectAttempts = 0;
@@ -100,16 +128,19 @@ async function connect() {
   ws.onerror = () => { /* onclose will follow and handle reconnect */ };
 }
 
-// Send a key "offer" and re-send it periodically until the channel is up. This
-// recovers the case where the first offer reaches an empty room (the other
-// person hasn't joined yet) or is lost. Retries stop once we're connected.
+// Broadcast a key "offer" (to the whole room) and re-send periodically so late
+// joiners and anyone whose first offer was lost still shake hands. In a group,
+// every member offers, and each pair completes its own ECDH. Retries keep going
+// a while so newcomers always get picked up.
 async function startOffer() {
   stopOffer();
-  const sendOffer = async () => { send({ t: "key", role: "offer", jwk: await E2EE.publicKeyJwk() }); };
+  const jwk = await E2EE.publicKeyJwk();
+  const sendOffer = async () => { send({ t: "key", role: "offer", from: myId, name: myName, jwk: await E2EE.publicKeyJwk() }); };
   await sendOffer();
   let tries = 0;
   offerTimer = setInterval(async () => {
-    if (announced || ++tries > 8) { stopOffer(); return; }
+    // Keep offering for a while (covers people joining later). Stop after ~40s.
+    if (++tries > 20) { stopOffer(); return; }
     await sendOffer();
   }, 2000);
 }
@@ -144,39 +175,69 @@ async function onMessage(ev) {
   if (m.t === "ping") return;                    // heartbeat, ignore
 
   if (m.t === "key") {
-    // Offer/answer handshake (WebRTC-style). Always derive from the received key
-    // so reconnecting peers re-sync. An OFFER gets an ANSWER back; an ANSWER ends
-    // the exchange (no reply), so there's no infinite loop.
-    try { await E2EE.deriveShared(m.jwk); } catch { return; }
+    // Group handshake: pairwise offer/answer, addressed by peer id.
+    // - Ignore my own broadcasts, and answers meant for someone else.
+    // - Always (re)derive a key with that peer, so reconnects re-sync.
+    // - An OFFER earns an ANSWER back to that peer; an ANSWER ends the exchange
+    //   (no reply), so there's no loop even with several people offering.
+    if (!m.from || m.from === myId) return;
+    if (m.role === "answer" && m.to !== myId) return;
+    try { await E2EE.deriveShared(m.from, m.jwk); } catch { return; }
+    const known = peers.has(m.from);
+    peers.set(m.from, { name: (m.name || "Anonymous").slice(0, 24) });
     if (m.role === "offer") {
-      send({ t: "key", role: "answer", jwk: await E2EE.publicKeyJwk() });
+      send({ t: "key", role: "answer", from: myId, to: m.from, name: myName, jwk: await E2EE.publicKeyJwk() });
     }
+    if (!known) sys((m.name || "Someone") + " joined.");
+    updateRoster();
     if (!announced) {
       announced = true;
-      stopOffer();
-      setStatus("connected", "encrypted — you're connected");
-      sys("Secure channel established. Messages are end-to-end encrypted.");
+      setStatus("connected", "encrypted — end-to-end");
     }
     return;
   }
 
   if (!E2EE.ready()) return;
 
-  if (m.t === "typing") { showPeerTyping(); return; }
+  if (m.t === "bye" && m.from) {
+    const p = peers.get(m.from);
+    if (p) { sys((p.name || "Someone") + " left."); peers.delete(m.from); E2EE.forget(m.from); updateRoster(); }
+    return;
+  }
+
+  if (m.t === "typing") { showPeerTyping(peers.get(m.from)?.name); return; }
 
   if (m.t === "msg") {
-    let text; try { text = dec.decode(await E2EE.decrypt(m.iv, m.data)); }
+    // In a group, a sender fans out one ciphertext per recipient. Only handle
+    // the copy addressed to me, decrypted with that sender's key.
+    if (m.to && m.to !== myId) return;
+    if (!m.from || !E2EE.hasPeer(m.from)) return;
+    let text; try { text = dec.decode(await E2EE.decryptFrom(m.from, m.iv, m.data)); }
     catch { return; }
-    addMessage(text, "them", m.ts);
-  } else if (m.t === "file") {
-    try {
-      const bytes = await E2EE.decrypt(m.iv, m.data);
-      const name = dec.decode(await E2EE.decrypt(m.name.iv, m.name.data));
-      const mime = dec.decode(await E2EE.decrypt(m.mime.iv, m.mime.data));
-      addFile(bytes, name, mime, m.size, "them", m.ts);
-    } catch { sys("Couldn't decrypt a file that was sent.", true); }
+    addMessage(text, "them", m.ts, m.id, m.replyTo, peers.get(m.from)?.name);
+  } else if (m.t === "file-start") {
+    if (m.to && m.to !== myId) return;
+    if (!m.from || !E2EE.hasPeer(m.from)) return;
+    incoming.set(m.id, { from: m.from, iv: m.iv, name: m.name, mime: m.mime, size: m.size, ts: m.ts, total: m.total, parts: new Array(m.total), got: 0 });
+  } else if (m.t === "file-chunk") {
+    if (m.to && m.to !== myId) return;
+    const f = incoming.get(m.id);
+    if (!f || f.parts[m.i] !== undefined) return;
+    f.parts[m.i] = m.part; f.got++;
+    if (f.got === f.total) {
+      incoming.delete(m.id);
+      try {
+        const bytes = await E2EE.decryptFrom(f.from, f.iv, f.parts.join(""));
+        const name = dec.decode(await E2EE.decryptFrom(f.from, f.name.iv, f.name.data));
+        const mime = dec.decode(await E2EE.decryptFrom(f.from, f.mime.iv, f.mime.data));
+        addFile(bytes, name, mime, f.size, "them", f.ts, peers.get(f.from)?.name);
+      } catch { sys("Couldn't decrypt a file that was sent.", true); }
+    }
   }
 }
+
+// Reassembly buffer for incoming chunked files, keyed by file id.
+const incoming = new Map();
 
 // ---- outgoing ----
 async function onSubmit(e) {
@@ -186,11 +247,17 @@ async function onSubmit(e) {
   if (!text) return;
   if (!E2EE.ready()) { toast("Not connected yet — hang on a second."); return; }
   const ts = Date.now();
+  const id = fileId();
+  const replyTo = replyingTo ? { id: replyingTo.id, preview: replyingTo.preview } : null;
   try {
-    const { iv, data } = await E2EE.encrypt(enc.encode(text));
-    send({ t: "msg", iv, data, ts });
-    addMessage(text, "me", ts);
-    ta.value = ""; autoGrow(ta); ta.focus();
+    // Fan out: encrypt once per peer with that peer's key, send addressed copies.
+    const bytes = enc.encode(text);
+    for (const pid of E2EE.peerIds()) {
+      const ct = await E2EE.encryptFor(pid, bytes);
+      if (ct) send({ t: "msg", from: myId, to: pid, iv: ct.iv, data: ct.data, ts, id, replyTo });
+    }
+    addMessage(text, "me", ts, id, replyTo);
+    ta.value = ""; autoGrow(ta); cancelReply(); ta.focus();
   } catch { toast("Couldn't send that message."); }
 }
 
@@ -210,20 +277,52 @@ async function sendFile(file) {
       if (cleaned) { buf = cleaned.bytes; outType = cleaned.type; outName = renameStripped(file.name, cleaned.type); }
     }
     if (!buf) buf = new Uint8Array(await file.arrayBuffer());
-    row.setProgress(50);
-    const payload = {
-      t: "file", ts, size: buf.length,
-      ...(await E2EE.encrypt(buf)),
-      name: await E2EE.encrypt(enc.encode(outName)),
-      mime: await E2EE.encrypt(enc.encode(outType || "application/octet-stream")),
-    };
-    row.setProgress(100);
-    send(payload);
+
+    // The relay only forwards frames up to ~64 KB, so a file goes as a stream of
+    // chunk messages the receiver reassembles. In a group we fan out: encrypt
+    // per peer (their own key) and stream an addressed copy to each. Name/mime
+    // ride along on the "file-start" message.
+    const CHUNK = 40000;                       // base64 chars per chunk (under 64 KB frame)
+    const nameBytes = enc.encode(outName);
+    const mimeBytes = enc.encode(outType || "application/octet-stream");
+    const pids = E2EE.peerIds();
+    let done = 0;
+    for (const pid of pids) {
+      const { iv, data } = await E2EE.encryptFor(pid, buf);
+      const name = await E2EE.encryptFor(pid, nameBytes);
+      const mime = await E2EE.encryptFor(pid, mimeBytes);
+      const id = fileId();
+      const total = Math.ceil(data.length / CHUNK) || 1;
+      send({ t: "file-start", from: myId, to: pid, id, ts, size: buf.length, iv, name, mime, total });
+      await new Promise((r) => setTimeout(r, 15));
+      for (let i = 0; i < total; i++) {
+        send({ t: "file-chunk", from: myId, to: pid, id, i, part: data.slice(i * CHUNK, (i + 1) * CHUNK) });
+        row.setProgress(Math.round((((done + (i + 1) / total)) / pids.length) * 100));
+        await new Promise((r) => setTimeout(r, 12)); // pace so chunks don't batch and drop
+      }
+      done++;
+    }
     row.replaceWithFile(buf, outName, outType, buf.length, ts);
   } catch {
     row.setError();
     toast("Couldn't send that file.");
   }
+}
+
+let fileCounter = 0;
+function fileId() { return Date.now().toString(36) + "-" + (fileCounter++); }
+
+// Full-screen image viewer. Click the backdrop or press Esc to close.
+function openLightbox(url, name) {
+  const box = document.createElement("div");
+  box.className = "lightbox";
+  const img = document.createElement("img"); img.src = url; img.alt = name;
+  box.appendChild(img);
+  box.onclick = () => close();
+  function close() { box.remove(); document.removeEventListener("keydown", onKey); }
+  function onKey(e) { if (e.key === "Escape") close(); }
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(box);
 }
 
 // Re-encode an image through a canvas. Canvas output contains ONLY pixels, so
@@ -261,31 +360,122 @@ function renameStripped(name, type) {
 // ---- typing indicator ----
 function signalTyping() {
   const now = Date.now();
-  if (E2EE.ready() && now - myTypingSent > 1500) { myTypingSent = now; send({ t: "typing" }); }
+  if (E2EE.ready() && now - myTypingSent > 1500) { myTypingSent = now; send({ t: "typing", from: myId }); }
 }
-function showPeerTyping() {
+function showPeerTyping(name) {
+  const label = $("typing").querySelector(".t-label");
+  if (label) label.textContent = (peers.size > 1 && name) ? name + " is typing" : "";
   $("typing").classList.add("show");
   clearTimeout(peerTypingTimer);
   peerTypingTimer = setTimeout(() => $("typing").classList.remove("show"), 2500);
 }
 
-// ---- rendering ----
-function addMessage(text, who, ts) {
-  const row = document.createElement("div");
-  row.className = "row " + who;
-  const b = document.createElement("div"); b.className = "bubble"; b.textContent = text;
-  const meta = document.createElement("div"); meta.className = "meta"; meta.textContent = fmtTime(ts);
-  row.append(b, meta); $("log").appendChild(row); scrollDown();
+// ---- roster (who's in the room) ----
+function updateRoster() {
+  const n = peers.size + 1; // +1 for me
+  const tag = $("peopleCount");
+  if (tag) tag.textContent = n <= 1 ? "just you" : n + " people";
+  const list = $("rosterList");
+  if (list) {
+    list.innerHTML = "";
+    const mine = document.createElement("div"); mine.className = "roster-item";
+    mine.textContent = myName + " (you)"; list.appendChild(mine);
+    for (const { name } of peers.values()) {
+      const it = document.createElement("div"); it.className = "roster-item";
+      it.textContent = name || "Anonymous"; list.appendChild(it);
+    }
+  }
 }
 
-function addFile(bytes, name, mime, size, who, ts) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
-  const row = document.createElement("div"); row.className = "row " + who;
+// ---- rendering ----
+// Registry of shown messages so a reply can quote and scroll back to them.
+const msgStore = new Map();   // id -> { who, preview }
+
+// Build a row with a reply button and (optional) quoted preview. Shared by
+// text and file messages.
+function makeRow(who, ts, id, replyTo, senderName) {
+  const row = document.createElement("div");
+  row.className = "row " + who;
+  row.dataset.id = id;
+  const wrap = document.createElement("div"); wrap.className = "bubble-wrap";
   const b = document.createElement("div"); b.className = "bubble";
-  if (mime && mime.startsWith("image/")) {
-    const a = document.createElement("a"); a.href = url; a.download = name;
+
+  // In a group (more than one peer), label incoming bubbles with the sender's
+  // name so you can tell who's who. Skipped for your own messages and 1:1 chats.
+  if (who === "them" && senderName && peers.size > 1) {
+    const nm = document.createElement("div"); nm.className = "sender"; nm.textContent = senderName;
+    b.appendChild(nm);
+  }
+
+  if (replyTo) {
+    // Label from the viewer's perspective: a quoted message that this viewer
+    // sent shows "You", otherwise "Them". Fall back to stored who if known.
+    const origWho = msgStore.has(replyTo.id) ? msgStore.get(replyTo.id).who : (who === "me" ? "them" : "me");
+    const q = document.createElement("div"); q.className = "quote";
+    const label = document.createElement("span"); label.className = "q-who";
+    label.textContent = origWho === "me" ? "You" : "Them";
+    q.appendChild(label);
+    q.appendChild(document.createTextNode(replyTo.preview));
+    q.title = "Jump to message";
+    q.onclick = () => jumpTo(replyTo.id);
+    b.appendChild(q);
+  }
+
+  const rbtn = document.createElement("button");
+  rbtn.className = "reply-btn"; rbtn.title = "Reply"; rbtn.setAttribute("aria-label", "Reply");
+  rbtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
+
+  wrap.append(b, rbtn);
+  return { row, wrap, b, rbtn };
+}
+
+function addMessage(text, who, ts, id, replyTo, senderName) {
+  id = id || fileId();
+  const { row, wrap, b, rbtn } = makeRow(who, ts, id, replyTo, senderName);
+  const span = document.createElement("span"); span.textContent = text; b.appendChild(span);
+  const preview = text.length > 60 ? text.slice(0, 60) + "…" : text;
+  msgStore.set(id, { who, preview });
+  rbtn.onclick = () => startReply(id, who, preview);
+  const meta = document.createElement("div"); meta.className = "meta"; meta.textContent = fmtTime(ts);
+  row.append(wrap, meta);
+  $("log").appendChild(row); scrollDown();
+}
+
+// Scroll to and briefly highlight the message a quote points at.
+function jumpTo(id) {
+  const el = $("log").querySelector('[data-id="' + CSS.escape(id) + '"]');
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
+
+// Reply state: what the next sent message will quote.
+let replyingTo = null;
+function startReply(id, who, preview) {
+  replyingTo = { id, preview };
+  $("reply-text").textContent = preview;
+  $("reply-bar").classList.add("show");
+  $("text").focus();
+}
+function cancelReply() {
+  replyingTo = null;
+  $("reply-bar").classList.remove("show");
+}
+
+function addFile(bytes, name, mime, size, who, ts, senderName) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const id = fileId();
+  const isImg = mime && mime.startsWith("image/");
+  const { row, wrap, b, rbtn } = makeRow(who, ts, id, null, senderName);
+  if (isImg) {
+    // Click the image to VIEW it full-size in a lightbox (not force a download).
     const img = document.createElement("img"); img.className = "img-att"; img.src = url; img.alt = name;
-    a.appendChild(img); b.appendChild(a);
+    img.style.cursor = "zoom-in";
+    img.onclick = () => openLightbox(url, name);
+    b.appendChild(img);
+    const save = document.createElement("a");
+    save.href = url; save.download = name; save.className = "img-save"; save.textContent = "Save";
+    b.appendChild(save);
   } else {
     const a = document.createElement("a"); a.href = url; a.download = name; a.className = "file-att";
     a.innerHTML = '<span class="fi"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg></span>';
@@ -293,8 +483,11 @@ function addFile(bytes, name, mime, size, who, ts) {
     info.innerHTML = '<span class="fn">' + escapeHtml(name) + '</span><br><span class="fs">' + fmtSize(size) + '</span>';
     a.appendChild(info); b.appendChild(a);
   }
+  const preview = (isImg ? "📷 " : "📎 ") + name;
+  msgStore.set(id, { who, preview });
+  rbtn.onclick = () => startReply(id, who, preview);
   const meta = document.createElement("div"); meta.className = "meta"; meta.textContent = fmtTime(ts);
-  row.append(b, meta); $("log").appendChild(row); scrollDown();
+  row.append(wrap, meta); $("log").appendChild(row); scrollDown();
 }
 
 function addUploadingRow(name, size) {
@@ -323,9 +516,10 @@ function copyInviteLink() {
 }
 function leaveRoom() {
   manualClose = true;
-  clearTimeout(reconnectTimer); stopHeartbeat();
+  try { send({ t: "bye", from: myId }); } catch {}   // let peers remove me cleanly
+  clearTimeout(reconnectTimer); stopHeartbeat(); stopOffer();
   try { ws && ws.close(); } catch {}
-  E2EE.reset();
+  E2EE.reset(); peers.clear();
   $("log").innerHTML = ""; $("typing").classList.remove("show");
   $("chat").style.display = "none"; $("setup").style.display = "block";
   $("room").value = ""; $("room").focus();
