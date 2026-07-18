@@ -45,6 +45,17 @@
 
   const ui = {
     open(video) { build(); overlay.classList.add("show"); overlay.classList.toggle("has-video", video); },
+    // Caller feedback so they're not staring at just themselves wondering if it worked.
+    waiting(othersInRoom) {
+      const bar = $("call-hint") || (() => {
+        const b = document.createElement("div"); b.id = "call-hint"; overlay.insertBefore(b, $("call-bar")); return b;
+      })();
+      bar.textContent = othersInRoom > 0
+        ? `Ringing… waiting for ${othersInRoom} ${othersInRoom === 1 ? "person" : "people"} in the room to join`
+        : "You're the only one here. Share the room link, then they can join your call.";
+      bar.style.display = "block";
+    },
+    hideWaiting() { const b = $("call-hint"); if (b) b.style.display = "none"; },
     close() { if (overlay) { overlay.classList.remove("show"); if (grid) grid.innerHTML = ""; } removeIncoming(); },
     addLocal(stream, name, video) {
       const t = tile("local", name + " (you)", true);   // mute own tile: no echo
@@ -52,6 +63,7 @@
       t.classList.toggle("audio-only", !video);
     },
     addRemote(peerId, stream, name) {
+      this.hideWaiting();
       const t = tile(peerId, name || "Guest", false);
       const v = t.querySelector("video"); v.srcObject = stream;
       // if the remote has no video track, show an audio-only tile

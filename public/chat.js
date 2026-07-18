@@ -61,6 +61,7 @@ function wire() {
       getMyId: () => myId,
       getName: () => myName,
       getPeerName: (id) => (peers.get(id)?.name) || "Guest",
+      peerCount: () => peers.size,
     });
   }
   window.__toast = (msg) => toast(msg);

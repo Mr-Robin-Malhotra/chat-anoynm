@@ -58,7 +58,10 @@ const Call = (() => {
 
   function configure(opts) {
     signal = opts.signal; getMyId = opts.getMyId; getName = opts.getName; getPeerName = opts.getPeerName;
+    if (opts.peerCount) peerCountHint = opts.peerCount;
   }
+
+  let inviteTimer = null;
 
   // ---- starting / joining a call ----
   async function start(video) {
@@ -70,16 +73,31 @@ const Call = (() => {
       });
     } catch (e) {
       ui.error(e && e.name === "NotAllowedError"
-        ? "Microphone/camera permission denied."
+        ? "Please allow microphone/camera access to call."
         : "Couldn't access your microphone/camera.");
       return;
     }
     active = true; withVideo = video;
     ui.open(video);
     ui.addLocal(localStream, getName(), video);
-    // Tell the room we're in the call so existing members offer to us.
-    signal({ t: "call-invite", from: getMyId(), name: getName(), video });
+
+    // Announce we're in the call, and KEEP announcing every 2s (like a ringing
+    // phone) so anyone in the room — including someone who has the tab open but
+    // just reconnected — reliably gets the invite. Stops once someone connects.
+    const invite = () => signal({ t: "call-invite", from: getMyId(), name: getName(), video });
+    invite();
+    clearInterval(inviteTimer);
+    inviteTimer = setInterval(() => {
+      if (pcs.size > 0) { clearInterval(inviteTimer); inviteTimer = null; }
+      else invite();
+    }, 2000);
+
+    // Let the caller know what's going on instead of staring at themselves.
+    ui.waiting(peerCountHint());
   }
+
+  // Rough count of who else is in the room (set by chat.js via a hook).
+  let peerCountHint = () => 0;
 
   // Someone announced they're in the call (a newcomer). Everyone already in the
   // call offers to the newcomer; the newcomer just answers. This avoids glare
@@ -181,6 +199,7 @@ const Call = (() => {
   function hangup() {
     if (!active) return;
     active = false;
+    clearInterval(inviteTimer); inviteTimer = null;
     signal({ t: "call-leave", from: getMyId() });
     for (const id of pcs.keys()) dropPeer(id);
     if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
