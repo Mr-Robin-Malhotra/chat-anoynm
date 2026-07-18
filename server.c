@@ -191,7 +191,7 @@ static int do_handshake(int fd, char *room_out) {
          * let the caller close the connection. */
         const char *ok =
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
-            "Content-Length: 24\r\nConnection: close\r\n\r\n"
+            "Content-Length: 23\r\nConnection: close\r\n\r\n"
             "chat-anoynm relay ok v3";
         send(fd, ok, strlen(ok), 0);
         return 0;
