@@ -222,6 +222,8 @@ async function onMessage(ev) {
     // (they meshed slightly faster). Hold it and replay once we have the key,
     // instead of dropping it.
     if (!E2EE.hasPeer(m.from)) { queuePending(m.from, m); return; }
+    if (m.id && seenMsgIds.has(m.id)) return;   // dedupe (live + outbox replay)
+    if (m.id) { seenMsgIds.add(m.id); if (seenMsgIds.size > 500) seenMsgIds.clear(); }
     let text; try { text = dec.decode(await E2EE.decryptFrom(m.from, m.iv, m.data)); }
     catch { return; }
     addMessage(text, "them", m.ts, m.id, m.replyTo, peers.get(m.from)?.name);
@@ -253,6 +255,7 @@ const incoming = new Map();
 // Messages that arrived just before the sender's key was ready, held per peer
 // and replayed the moment the handshake with that peer completes.
 const pending = new Map();     // peerId -> [messages]
+const seenMsgIds = new Set();  // dedupe messages delivered twice (live + replay)
 function queuePending(peerId, m) {
   if (!pending.has(peerId)) pending.set(peerId, []);
   const q = pending.get(peerId);
@@ -260,9 +263,23 @@ function queuePending(peerId, m) {
 }
 function flushPending(peerId) {
   const q = pending.get(peerId);
-  if (!q) return;
-  pending.delete(peerId);
-  for (const m of q) onMessage({ data: JSON.stringify(m) });
+  if (q) { pending.delete(peerId); for (const m of q) onMessage({ data: JSON.stringify(m) }); }
+  // Also send this newly-keyed peer any of my recent text messages they may have
+  // missed while we were still shaking hands (covers the mesh-timing race).
+  sendOutboxTo(peerId);
+}
+
+// Short-lived record of my recent OWN text messages, so a peer who finishes the
+// handshake a moment late still receives them. Bounded and time-limited.
+const outbox = [];   // { plain, ts, id, replyTo }
+function rememberOutgoing(rec) { outbox.push(rec); if (outbox.length > 30) outbox.shift(); }
+async function sendOutboxTo(peerId) {
+  const cutoff = Date.now() - 20000;   // only messages from the last 20s
+  for (const o of outbox) {
+    if (o.ts < cutoff) continue;
+    const ct = await E2EE.encryptFor(peerId, enc.encode(o.plain));
+    if (ct) send({ t: "msg", from: myId, to: peerId, iv: ct.iv, data: ct.data, ts: o.ts, id: o.id, replyTo: o.replyTo });
+  }
 }
 
 // ---- outgoing ----
@@ -282,6 +299,7 @@ async function onSubmit(e) {
       const ct = await E2EE.encryptFor(pid, bytes);
       if (ct) send({ t: "msg", from: myId, to: pid, iv: ct.iv, data: ct.data, ts, id, replyTo });
     }
+    rememberOutgoing({ plain: text, ts, id, replyTo });   // for peers who mesh a moment late
     addMessage(text, "me", ts, id, replyTo);
     ta.value = ""; autoGrow(ta); cancelReply(); ta.focus();
   } catch { toast("Couldn't send that message."); }
