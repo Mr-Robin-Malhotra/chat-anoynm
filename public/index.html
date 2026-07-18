@@ -268,6 +268,8 @@
   }
   #call-grid:has(.call-tile:nth-child(2)) { grid-template-columns: 1fr 1fr; }
   #call-grid:has(.call-tile:nth-child(5)) { grid-template-columns: 1fr 1fr 1fr; }
+  #call-grid:has(.call-tile:nth-child(7)) { grid-template-columns: repeat(3, 1fr); }
+  #call-grid:has(.call-tile:nth-child(10)) { grid-template-columns: repeat(4, 1fr); }
   .call-tile {
     position: relative; background: var(--surface-2); border-radius: 14px; overflow: hidden;
     aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; min-height: 0;
@@ -281,6 +283,12 @@
     position: absolute; left: 8px; bottom: 8px; font-size: 12px; font-weight: 600;
     background: rgba(0,0,0,.55); color: #fff; padding: 3px 8px; border-radius: 8px;
   }
+  .call-status {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: var(--ink-dim); background: rgba(5,7,11,.4); text-align: center; padding: 8px;
+  }
+  .call-status:empty { display: none; }
+  .call-tile.failed .call-status { color: #ff8b8b; }
   #call-bar {
     display: flex; gap: 14px; justify-content: center; padding: 16px;
     padding-bottom: max(16px, env(safe-area-inset-bottom));

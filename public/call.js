@@ -20,19 +20,28 @@
  */
 
 const Call = (() => {
+  // ICE servers. STUN alone connects people on simple networks; TURN relays
+  // media for anyone behind a strict NAT/firewall (without it, some calls just
+  // never connect — the usual "it says calling but nothing happens"). We list
+  // several TURN transports: UDP is fastest, but TCP and TLS/443 punch through
+  // almost any corporate firewall, so a call will fall back to whatever works.
   const ICE = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
-      // Free community TURN (helps peers behind strict NATs connect). If a call
-      // won't connect for someone, this is usually why; a paid TURN is more
-      // reliable but costs money.
+      { urls: "stun:stun.cloudflare.com:3478" },
       {
-        urls: "turn:openrelay.metered.ca:80",
+        urls: [
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp",
+          "turns:openrelay.metered.ca:443?transport=tcp",
+        ],
         username: "openrelayproject",
         credential: "openrelayproject",
       },
     ],
+    iceCandidatePoolSize: 4,
   };
 
   let active = false;        // are we in a call?
@@ -81,21 +90,50 @@ const Call = (() => {
     await makeOffer(from);                  // I'm already in the call -> I offer
   }
 
+  // Per-peer ICE candidate queue. Candidates can arrive before we've called
+  // setRemoteDescription; adding them then throws and the connection silently
+  // never forms (the classic real-world WebRTC bug). So we buffer them and flush
+  // once the remote description is set.
+  const iceQueue = new Map();  // peerId -> [candidates]
+
   function newPeer(peerId) {
     const pc = new RTCPeerConnection(ICE);
     pcs.set(peerId, pc);
+    pc.hasRemote = false;
     for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
     pc.onicecandidate = (e) => {
       if (e.candidate) signal({ t: "call-ice", from: getMyId(), to: peerId, cand: e.candidate });
     };
-    pc.ontrack = (e) => ui.addRemote(peerId, e.streams[0], getPeerName(peerId));
-    pc.onconnectionstatechange = () => {
-      if (["failed", "closed", "disconnected"].includes(pc.connectionState)) dropPeer(peerId);
+    pc.ontrack = (e) => { log(peerId, "track received"); ui.addRemote(peerId, e.streams[0], getPeerName(peerId)); };
+    pc.oniceconnectionstatechange = () => {
+      log(peerId, "ice=" + pc.iceConnectionState);
+      if (pc.iceConnectionState === "failed") { try { pc.restartIce(); } catch {} }
     };
+    pc.onconnectionstatechange = () => {
+      log(peerId, "conn=" + pc.connectionState);
+      const st = pc.connectionState;
+      if (st === "connected") { clearTimeout(pc.failTimer); ui.peerStatus(peerId, "connected"); }
+      if (["failed", "closed"].includes(st)) dropPeer(peerId);
+      if (st === "disconnected") ui.peerStatus(peerId, "reconnecting");
+    };
+    // If a peer hasn't connected within 20s, tell the user (usually a NAT/TURN
+    // problem) instead of leaving them staring at a silent "calling…" tile.
+    pc.failTimer = setTimeout(() => {
+      if (pc.connectionState !== "connected") {
+        ui.peerStatus(peerId, "failed");
+        log(peerId, "connect timeout");
+      }
+    }, 20000);
     return pc;
   }
 
+  async function flushIce(peerId, pc) {
+    const q = iceQueue.get(peerId);
+    if (q) { iceQueue.delete(peerId); for (const c of q) { try { await pc.addIceCandidate(c); } catch {} } }
+  }
+
   async function makeOffer(peerId) {
+    log(peerId, "making offer");
     const pc = newPeer(peerId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -104,8 +142,11 @@ const Call = (() => {
 
   async function onOffer(from, sdp) {
     if (!active) return;                 // ignore offers when not in a call
+    log(from, "got offer");
     let pc = pcs.get(from) || newPeer(from);
     await pc.setRemoteDescription(sdp);
+    pc.hasRemote = true;
+    await flushIce(from, pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     signal({ t: "call-answer", from: getMyId(), to: from, sdp: pc.localDescription });
@@ -113,18 +154,28 @@ const Call = (() => {
 
   async function onAnswer(from, sdp) {
     const pc = pcs.get(from);
-    if (pc) await pc.setRemoteDescription(sdp);
+    if (!pc) return;
+    log(from, "got answer");
+    await pc.setRemoteDescription(sdp);
+    pc.hasRemote = true;
+    await flushIce(from, pc);
   }
 
   async function onIce(from, cand) {
     const pc = pcs.get(from);
-    if (pc) { try { await pc.addIceCandidate(cand); } catch {} }
+    if (pc && pc.hasRemote) { try { await pc.addIceCandidate(cand); } catch {} }
+    else { if (!iceQueue.has(from)) iceQueue.set(from, []); iceQueue.get(from).push(cand); }
   }
 
   function dropPeer(peerId) {
     const pc = pcs.get(peerId);
     if (pc) { try { pc.close(); } catch {} pcs.delete(peerId); }
+    iceQueue.delete(peerId);
     ui.removeRemote(peerId);
+  }
+
+  function log(peerId, msg) {
+    if (window.__CALL_DEBUG) console.log("[call " + String(peerId).slice(0, 4) + "] " + msg);
   }
 
   function hangup() {

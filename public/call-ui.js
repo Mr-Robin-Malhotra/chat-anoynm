@@ -37,7 +37,8 @@
       t = document.createElement("div"); t.className = "call-tile"; t.id = "tile-" + id;
       const v = document.createElement("video"); v.autoplay = true; v.playsInline = true; if (muted) v.muted = true;
       const n = document.createElement("div"); n.className = "call-name"; n.textContent = label;
-      t.append(v, n); grid.appendChild(t);
+      const s = document.createElement("div"); s.className = "call-status"; s.textContent = id === "local" ? "" : "Connecting…";
+      t.append(v, n, s); grid.appendChild(t);
     }
     return t;
   }
@@ -58,6 +59,13 @@
       t.classList.toggle("audio-only", !hasVideo);
     },
     removeRemote(peerId) { const t = document.getElementById("tile-" + peerId); if (t) t.remove(); },
+    peerStatus(peerId, state) {
+      const t = document.getElementById("tile-" + peerId); if (!t) return;
+      const s = t.querySelector(".call-status"); if (!s) return;
+      if (state === "connected") { s.textContent = ""; t.classList.remove("failed"); }
+      else if (state === "reconnecting") { s.textContent = "Reconnecting…"; }
+      else if (state === "failed") { s.textContent = "Couldn't connect (network/firewall)"; t.classList.add("failed"); }
+    },
     checkEmpty() { /* mesh: staying in the call alone is fine, they may rejoin */ },
     error(msg) { if (window.__toast) window.__toast(msg); else alert(msg); },
     // An incoming-call banner when someone starts a call and you're not in it yet.

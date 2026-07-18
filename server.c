@@ -118,7 +118,7 @@ static void b64(const unsigned char *in, int len, char *out) {
 }
 
 /* ---- limits (DoS / abuse protection, per OWASP WebSocket guidance) ---- */
-#define ROOM_CAP        6      /* max connections sharing one room (small group) */
+#define ROOM_CAP        10     /* max connections sharing one room (small group) */
 #define RATE_WINDOW     10     /* seconds */
 #define RATE_MAX        600    /* max frames per window (files stream as many chunks) */
 #define IDLE_TIMEOUT    120    /* drop a connection after this many idle seconds */
@@ -199,7 +199,7 @@ static int do_handshake(int fd, char *room_out) {
         const char *ok =
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
             "Content-Length: 23\r\nConnection: close\r\n\r\n"
-            "chat-anoynm relay ok v4";
+            "chat-anoynm relay ok v5";
         send(fd, ok, strlen(ok), 0);
         return 0;
     }
